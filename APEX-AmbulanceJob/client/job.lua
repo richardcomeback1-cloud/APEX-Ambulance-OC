@@ -873,15 +873,28 @@ local function isAnyEsxMenuOpen()
 	return ok and type(menus) == 'table' and #menus > 0
 end
 
+local lastOpenedMenuCheck = 0
+local cachedHasOpenMenu = false
+
+local function getHasOpenMenuCached(now)
+	if (now - lastOpenedMenuCheck) >= 200 then
+		cachedHasOpenMenu = isAnyEsxMenuOpen()
+		lastOpenedMenuCheck = now
+	end
+
+	return cachedHasOpenMenu
+end
+
 -- Key Controls
 Citizen.CreateThread(function()
 	while true do
 		local sleep = 250
-		local hasOpenMenu = isAnyEsxMenuOpen()
+		local now = GetGameTimer()
+		local hasOpenMenu = getHasOpenMenuCached(now)
 		local isMenuOpen = AmbulanceMenuState.open or hasOpenMenu
 
 		if isMenuOpen then
-			sleep = 0
+			sleep = 5
 			local backPressed = IsControlJustReleased(0, Keys['BACKSPACE']) or IsDisabledControlJustReleased(0, Keys['BACKSPACE'])
 			local escPressed = IsControlJustReleased(0, 322) or IsDisabledControlJustReleased(0, 322)
 
@@ -894,6 +907,7 @@ Citizen.CreateThread(function()
 					end)
 				else
 					closeAmbulanceMenuState()
+					cachedHasOpenMenu = false
 				end
 			end
 		end
