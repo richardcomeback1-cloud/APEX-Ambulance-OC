@@ -3,6 +3,21 @@ local ESX = exports['es_extended']:getSharedObject()
 local PLAYER_CACHE = {}
 local PROCESSING_LOCKS = {}
 local REQUEST_RATE_LIMIT = {}
+local ACTION_RATE_LIMIT = {}
+
+local EVENT_COOLDOWN_MS = {
+    setDeathStatus = 500,
+    payFine = 1000,
+    payFineEvent = 1000,
+    giveItem = 750,
+    removeItem = 300,
+    addExp = 1000,
+    revive = 1000,
+    superRevive = 2500,
+    heal = 750,
+    requestTalk = 1500,
+    requestAccept = 1000
+}
 local WRITE_QUEUE = {
     death = {}
 }
@@ -114,6 +129,7 @@ AddEventHandler('playerDropped', function()
     PLAYER_CACHE[src] = nil
     PROCESSING_LOCKS[src] = nil
     REQUEST_RATE_LIMIT[src] = nil
+    ACTION_RATE_LIMIT[src] = nil
 end)
 
 RegisterNetEvent('esx:playerLoaded', function(playerId, xPlayer)
@@ -184,6 +200,53 @@ local function withPlayerLock(src, cb)
     return true, result
 end
 
+
+local function canRunEvent(src, key)
+    local cooldown = EVENT_COOLDOWN_MS[key]
+    if not cooldown then
+        return true
+    end
+
+    local now = getNowMs()
+    local state = ACTION_RATE_LIMIT[src]
+    if not state then
+        ACTION_RATE_LIMIT[src] = { [key] = now }
+        return true
+    end
+
+    local last = state[key] or 0
+    if (now - last) < cooldown then
+        return false
+    end
+
+    state[key] = now
+    return true
+end
+
+local function isTargetNearSource(src, target, maxDistance)
+    if not isValidSource(src) or not isValidSource(target) then
+        return false
+    end
+
+    local srcPed = GetPlayerPed(src)
+    local targetPed = GetPlayerPed(target)
+    if srcPed <= 0 or targetPed <= 0 then
+        return false
+    end
+
+    local srcCoords = GetEntityCoords(srcPed)
+    local targetCoords = GetEntityCoords(targetPed)
+    if not srcCoords or not targetCoords then
+        return false
+    end
+
+    local dx = srcCoords.x - targetCoords.x
+    local dy = srcCoords.y - targetCoords.y
+    local dz = srcCoords.z - targetCoords.z
+    local distSq = (dx * dx) + (dy * dy) + (dz * dz)
+    local maxDist = tonumber(maxDistance) or 4.0
+    return distSq <= (maxDist * maxDist)
+end
 local function rateLimitOkay(src)
     local now = getNowMs()
     local state = REQUEST_RATE_LIMIT[src]
@@ -413,6 +476,7 @@ end)
 
 RegisterNetEvent('esx_ambulancejob:setDeathStatus', function(isDead)
     local src = source
+    if not canRunEvent(src, 'setDeathStatus') then return end
     local cached = getPlayerCache(src)
     if not cached then return end
 
@@ -450,6 +514,7 @@ end)
 
 RegisterNetEvent('esx_ambulancejob:payFine', function()
     local src = source
+    if not canRunEvent(src, 'payFine') then return end
     local cached = getPlayerCache(src)
     if not cached then return end
 
@@ -467,6 +532,7 @@ end)
 
 RegisterNetEvent('esx_ambulancejob:payFineEvent', function(payType)
     local src = source
+    if not canRunEvent(src, 'payFineEvent') then return end
     local cached = getPlayerCache(src)
     if not cached then return end
 
@@ -481,6 +547,7 @@ end)
 
 RegisterNetEvent('esx_ambulancejob:giveItem', function(item, count)
     local src = source
+    if not canRunEvent(src, 'giveItem') then return end
     local cached = getPlayerCache(src)
     if not isAmbulance(cached) then return end
 
@@ -495,6 +562,7 @@ end)
 
 RegisterNetEvent('esx_ambulancejob:removeItem', function(item)
     local src = source
+    if not canRunEvent(src, 'removeItem') then return end
     local cached = getPlayerCache(src)
     if not cached then return end
     if type(item) ~= 'string' or item == '' then return end
@@ -510,6 +578,7 @@ end)
 
 RegisterNetEvent('esx_ambulancejob:addExp', function(typeItem, count)
     local src = source
+    if not canRunEvent(src, 'addExp') then return end
     local cached = getPlayerCache(src)
     if not cached then return end
 
@@ -525,21 +594,25 @@ end)
 
 RegisterNetEvent('esx_ambulancejob:revive', function(target)
     local src = source
+    if not canRunEvent(src, 'revive') then return end
     if not isAmbulance(getPlayerCache(src)) then return end
 
     target = tonumber(target)
-    if not target or not getPlayerCache(target) then return end
+    if not target or target == src or not getPlayerCache(target) then return end
+    if not isTargetNearSource(src, target, Config.ReviveDistance or 4.0) then return end
     TriggerClientEvent('esx_ambulancejob:revive', target)
 end)
 
 RegisterNetEvent('esx_ambulancejob:superRevive', function(targetList)
     local src = source
+    if not canRunEvent(src, 'superRevive') then return end
     if not isAmbulance(getPlayerCache(src)) then return end
     if type(targetList) ~= 'table' then return end
 
-    for i = 1, #targetList do
+    local maxTargets = math.min(#targetList, 25)
+    for i = 1, maxTargets do
         local target = tonumber(targetList[i])
-        if target and getPlayerCache(target) then
+        if target and target ~= src and getPlayerCache(target) and isTargetNearSource(src, target, Config.ReviveDistance or 4.0) then
             TriggerClientEvent('esx_ambulancejob:revive', target)
         end
     end
@@ -547,24 +620,35 @@ end)
 
 RegisterNetEvent('esx_ambulancejob:heal', function(target, healType)
     local src = source
+    if not canRunEvent(src, 'heal') then return end
     if not isAmbulance(getPlayerCache(src)) then return end
 
     target = tonumber(target)
-    if not target or not getPlayerCache(target) then return end
-    TriggerClientEvent('esx_ambulancejob:heal', target, healType or 'small')
+    if not target or target == src or not getPlayerCache(target) then return end
+    if not isTargetNearSource(src, target, Config.ReviveDistance or 4.0) then return end
+
+    local normalizedHealType = healType == 'big' and 'big' or 'small'
+    TriggerClientEvent('esx_ambulancejob:heal', target, normalizedHealType)
 end)
 
 RegisterNetEvent('esx_ambulancejob:requestTalk', function(target)
     local src = source
+    if not canRunEvent(src, 'requestTalk') then return end
+
     target = tonumber(target)
-    if target and getPlayerCache(target) then
-        TriggerClientEvent('esx_ambulancejob:requesToTalk', target, src)
-    end
+    if not target or target == src or not getPlayerCache(target) then return end
+    if not isTargetNearSource(src, target, 4.0) then return end
+
+    TriggerClientEvent('esx_ambulancejob:requesToTalk', target, src)
 end)
 
 RegisterNetEvent('esx_ambulancejob:requestAccept', function(playerTalk, ok, time)
+    local src = source
+    if not canRunEvent(src, 'requestAccept') then return end
+
     local target = tonumber(playerTalk)
-    if not target then return end
+    if not target or target == src or not getPlayerCache(target) then return end
+    if not isTargetNearSource(src, target, 4.0) then return end
 
     if ok then
         TriggerClientEvent('esx_ambulancejob:updateTalk', target, tonumber(time) or 500)

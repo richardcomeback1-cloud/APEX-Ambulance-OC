@@ -763,20 +763,21 @@ Citizen.CreateThread(function()
 				end
 			end
 
-			-- Fast Travels
-			for k, v in ipairs(hospital.FastTravels or {}) do
-				local distance = GetDistanceBetweenCoords(playerCoords, v.From, true)
+			if isAmbulance then
+				-- Fast Travels
+				for k, v in ipairs(hospital.FastTravels or {}) do
+					local distance = GetDistanceBetweenCoords(playerCoords, v.From, true)
 
-				if distance < 20 then
-					sleep = 0
-					DrawMarker(v.Marker.type, v.From, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, v.Marker.x, v.Marker.y, v.Marker.z,
-						v.Marker.r, v.Marker.g, v.Marker.b, v.Marker.a, false, false, 2, v.Marker.rotate, nil, nil, false)
-					letSleep = false
-				end
+					if distance < 20 then
+						sleep = 0
+						DrawMarker(v.Marker.type, v.From, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, v.Marker.x, v.Marker.y, v.Marker.z,
+							v.Marker.r, v.Marker.g, v.Marker.b, v.Marker.a, false, false, 2, v.Marker.rotate, nil, nil, false)
+						letSleep = false
+					end
 
-
-				if distance < v.Marker.x then
-					FastTravel(v.To.coords, v.To.heading)
+					if distance < v.Marker.x then
+						FastTravel(v.To.coords, v.To.heading)
+					end
 				end
 			end
 		end
@@ -898,8 +899,8 @@ Citizen.CreateThread(function()
 
 				CurrentAction = nil
 			end
-			elseif ESX.PlayerData and ESX.PlayerData.job and ESX.PlayerData.job.name == 'ambulance' and not IsDead then
-				sleep = 50
+		elseif ESX.PlayerData and ESX.PlayerData.job and ESX.PlayerData.job.name == 'ambulance' and not IsDead then
+			sleep = 50
 				if IsControlJustReleased(0, Keys['F6']) then
 					OpenMobileAmbulanceActionsMenu()
 				end
