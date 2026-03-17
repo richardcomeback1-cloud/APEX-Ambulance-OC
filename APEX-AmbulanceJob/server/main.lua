@@ -11,6 +11,7 @@ local DeathDbColumn = nil
 local CoreRequestHandlers = {}
 
 local RATE_WINDOW_MS = 1000
+local REQUEST_COOLDOWN_MS = 750
 local RATE_LIMIT_PER_WINDOW = (Config.CoreRateLimit and Config.CoreRateLimit.perSecond) or 10
 local WRITE_FLUSH_MS = (Config.CoreWriteQueue and Config.CoreWriteQueue.flushMs) or 15000
 
@@ -187,8 +188,20 @@ local function rateLimitOkay(src)
     local now = getNowMs()
     local state = REQUEST_RATE_LIMIT[src]
 
-    if not state or (now - state.windowStart) >= RATE_WINDOW_MS then
-        REQUEST_RATE_LIMIT[src] = { windowStart = now, count = 1 }
+    if not state then
+        REQUEST_RATE_LIMIT[src] = { windowStart = now, count = 1, lastRequest = now }
+        return true
+    end
+
+    if (now - (state.lastRequest or 0)) < REQUEST_COOLDOWN_MS then
+        return false
+    end
+
+    state.lastRequest = now
+
+    if (now - state.windowStart) >= RATE_WINDOW_MS then
+        state.windowStart = now
+        state.count = 1
         return true
     end
 
