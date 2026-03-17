@@ -848,6 +848,14 @@ AddEventHandler('esx_ambulancejob:hasExitedMarker', function(hospital, part, par
 	CurrentAction = nil
 end)
 
+RegisterCommand('ambulance_open_mobile_menu', function()
+	if IsDead then return end
+	if not (ESX.PlayerData and ESX.PlayerData.job and ESX.PlayerData.job.name == 'ambulance') then return end
+	OpenMobileAmbulanceActionsMenu()
+end, false)
+
+RegisterKeyMapping('ambulance_open_mobile_menu', 'Open Ambulance Mobile Menu', 'keyboard', 'F6')
+
 -- Key Controls
 Citizen.CreateThread(function()
 	while true do
@@ -899,11 +907,6 @@ Citizen.CreateThread(function()
 
 				CurrentAction = nil
 			end
-		elseif ESX.PlayerData and ESX.PlayerData.job and ESX.PlayerData.job.name == 'ambulance' and not IsDead then
-			sleep = 50
-				if IsControlJustReleased(0, Keys['F6']) then
-					OpenMobileAmbulanceActionsMenu()
-				end
 		end
 
 		Citizen.Wait(sleep)
