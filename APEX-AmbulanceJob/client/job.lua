@@ -555,8 +555,6 @@ function OpenMobileAmbulanceActionsMenu()
 		{ label = 'ชุบชีวิต', value = 'revive_menu' },
 		{ label = 'ฉีดยา', value = 'heal_menu' },
 		{ label = 'ตรวจบัตรประชาชน', value = 'identity_card' },
-		{ label = 'นำคนไข้ขึนรถ', value = 'put_in_vehicle' },
-		{ label = 'นำคนไข้ออกรถ', value = 'put_out_vehicle' },
 		{ label = 'เมนูบิล', value = 'billed' },
 		{ label = 'ส่งตัวผู้เล่น', value = 'sendgarage' },
 	}
@@ -586,38 +584,46 @@ function OpenMobileAmbulanceActionsMenu()
 			TriggerServerEvent('esx_policejob:message', 'error', GetPlayerServerId(closestPlayer),
 				'You have been your ID checked.')
 		elseif data.current.value == 'sendgarage' then
+			local transferCfg = Config.PlayerTransfer or {}
+			if transferCfg.enabled == false then
+				ESX.ShowNotification('ระบบส่งตัวถูกปิดอยู่', 'error')
+				return
+			end
+
 			local closestPlayer = getClosestPlayerWithin(3.0)
 			if not closestPlayer then return end
+
+			local destinations = transferCfg.destinations or {}
+			if #destinations == 0 then
+				ESX.ShowNotification('ยังไม่ได้ตั้งค่าจุดส่งตัวผู้เล่น', 'error')
+				return
+			end
+
 			AmbulanceMenuState.level = 'submenu'
 			AmbulanceMenuState.previousOpener = OpenMobileAmbulanceActionsMenu
+
+			local destinationElements = {}
+			for i = 1, #destinations do
+				local destination = destinations[i]
+				table.insert(destinationElements, {
+					label = destination.label or ('จุดที่ ' .. i),
+					value = i
+				})
+			end
+
 			ESX.UI.Menu.Open('default', GetCurrentResourceName(), 'send_garage', {
-				title    = "SEND PLAYER TO GARAGE",
+				title    = "เลือกจุดส่งตัวผู้เล่น",
 				align    = 'top-right',
-				elements = {
-					{ label = 'ตงลง', value = 'YES' },
-					{ label = 'ยกเลิก', value = 'NO' },
-				}
+				elements = destinationElements
 			}, function(dataa, menuu)
-				if dataa.current.value == "YES" then
-					safeCloseMenu(menuu)
-					TriggerServerEvent('sendplayertogarage', GetPlayerServerId(closestPlayer))
-				else
-					safeCloseMenu(menuu)
-				end
+				safeCloseMenu(menuu)
+				TriggerServerEvent('sendplayertogarage', GetPlayerServerId(closestPlayer), tonumber(dataa.current.value))
 			end, function(_, menuu)
 				safeCloseMenu(menuu)
 				if AmbulanceMenuState.open then
 					AmbulanceMenuState.level = 'main'
 				end
 			end)
-		elseif data.current.value == 'put_in_vehicle' then
-			local closestPlayer = getClosestPlayerWithin(3.0)
-			if not closestPlayer then return end
-			TriggerServerEvent('esx_ambulancejob:putInVehicle', GetPlayerServerId(closestPlayer))
-		elseif data.current.value == 'put_out_vehicle' then
-			local closestPlayer = getClosestPlayerWithin(3.0)
-			if not closestPlayer then return end
-			TriggerServerEvent('esx_ambulancejob:outVehicle', GetPlayerServerId(closestPlayer))
 		elseif data.current.value == 'billed' then
 			local closestPlayer = getClosestPlayerWithin(2.0)
 			if not closestPlayer then return end
@@ -955,30 +961,6 @@ Citizen.CreateThread(function()
 	end
 end)
 
-RegisterNetEvent('esx_ambulancejob:putInVehicle')
-AddEventHandler('esx_ambulancejob:putInVehicle', function()
-	local playerPed = PlayerPedId()
-	local coords = GetEntityCoords(playerPed)
-
-	if IsAnyVehicleNearPoint(coords, 5.0) then
-		local vehicle = GetClosestVehicle(coords, 5.0, 0, 71)
-
-		if DoesEntityExist(vehicle) then
-			local maxSeats, freeSeat = GetVehicleMaxNumberOfPassengers(vehicle)
-
-			for i = maxSeats - 1, 0, -1 do
-				if IsVehicleSeatFree(vehicle, i) then
-					freeSeat = i
-					break
-				end
-			end
-
-			if freeSeat then
-				TaskWarpPedIntoVehicle(playerPed, vehicle, freeSeat)
-			end
-		end
-	end
-end)
 
 function OpenCloakroomMenu()
 	local playerPed = PlayerPedId()
@@ -1444,25 +1426,27 @@ function _CHKHASITEM(Item)
 	return 0
 end
 
-RegisterNetEvent('esx_ambulancejob:outVehicle')
-AddEventHandler('esx_ambulancejob:outVehicle', function()
-	local playerPed = PlayerPedId()
-
-	if not IsPedSittingInAnyVehicle(playerPed) then
-		return
-	end
-
-	local vehicle = GetVehiclePedIsIn(playerPed, false)
-	TaskLeaveVehicle(playerPed, vehicle, 16)
-end)
 
 RegisterNetEvent('sendplayertogarage')
-AddEventHandler('sendplayertogarage', function()
-	RdmPoint = math.random(1, #Config.RandomPointSendPlayer)
+AddEventHandler('sendplayertogarage', function(destinationIndex)
+	local transferCfg = Config.PlayerTransfer or {}
+	local destinations = transferCfg.destinations or {}
+	if #destinations == 0 then return end
 
-	SetEntityCoords(PlayerPedId(), Config.RandomPointSendPlayer[RdmPoint].x, Config.RandomPointSendPlayer[RdmPoint].y,
-		Config.RandomPointSendPlayer[RdmPoint].z + 1)
-	SetEntityHeading(PlayerPedId(), Config.RandomPointSendPlayer[RdmPoint].h)
+	local index = tonumber(destinationIndex)
+	if not index or not destinations[index] then
+		if transferCfg.useRandomWhenNoPick then
+			index = math.random(1, #destinations)
+		else
+			index = 1
+		end
+	end
+
+	local destination = destinations[index]
+	if not destination or not destination.coords then return end
+
+	SetEntityCoords(PlayerPedId(), destination.coords.x, destination.coords.y, destination.coords.z + 1.0)
+	SetEntityHeading(PlayerPedId(), destination.heading or 0.0)
 end)
 
 function OpenCreateBilling(player)

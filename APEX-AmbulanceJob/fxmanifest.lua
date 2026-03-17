@@ -14,6 +14,7 @@ server_scripts {
 	'config/config.lua',
 	'config/config-item.lua',
 	'config/config-billing.lua',
+	'config/config-transfer.lua',
 	'config/zones.lua',
 	'server/main.lua',
 }
@@ -24,6 +25,7 @@ client_scripts {
 	'config/config.lua',
 	'config/config-item.lua',
 	'config/config-billing.lua',
+	'config/config-transfer.lua',
 	'config/zones.lua',
 	'client/cam.lua',
 	'client/main.lua',

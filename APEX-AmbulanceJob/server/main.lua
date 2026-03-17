@@ -16,7 +16,8 @@ local EVENT_COOLDOWN_MS = {
     superRevive = 2500,
     heal = 750,
     requestTalk = 1500,
-    requestAccept = 1000
+    requestAccept = 1000,
+    transferPlayer = 1000
 }
 local WRITE_QUEUE = {
     death = {}
@@ -663,4 +664,36 @@ RegisterNetEvent('esx_ambulancejob:requestAccept', function(playerTalk, ok, time
     else
         TriggerClientEvent('esx_ambulancejob:updateTalk', target)
     end
+end)
+
+RegisterNetEvent('sendplayertogarage', function(target, destinationIndex)
+    local src = source
+    if not canRunEvent(src, 'transferPlayer') then return end
+
+    local sender = getPlayerCache(src)
+    if not sender then return end
+
+    local transferCfg = Config.PlayerTransfer or {}
+    if transferCfg.enabled == false then return end
+    if transferCfg.requireAmbulanceJob ~= false and not isAmbulance(sender) then return end
+
+    target = tonumber(target)
+    if not target or target == src or not getPlayerCache(target) then return end
+
+    local maxDistance = tonumber(transferCfg.maxUseDistance) or 3.0
+    if not isTargetNearSource(src, target, maxDistance) then return end
+
+    local destinations = transferCfg.destinations or {}
+    if #destinations == 0 then return end
+
+    local index = tonumber(destinationIndex)
+    if not index or not destinations[index] then
+        if transferCfg.useRandomWhenNoPick then
+            index = math.random(1, #destinations)
+        else
+            index = 1
+        end
+    end
+
+    TriggerClientEvent('sendplayertogarage', target, index)
 end)
