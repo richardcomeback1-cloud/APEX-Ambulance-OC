@@ -275,18 +275,23 @@ local function handleZoneDeath(zoneType, config, zoneIndex)
         title_show = config.title
     })
 
-    -- เริ่มระบบเวลาปกติ (นับเวลา 35 นาที/3 นาที) ยกเว้น Training Zone
-    if zoneType ~= "training" then
-        ApexServerRequest('getDynamicRespawnTimer', nil, function(success, response)
-            local dynamicTimerMs = success and response and response.timerMs or nil
-            local emsCount = success and response and response.emsCount or 0
-            if (tonumber(emsCount) or 0) >= 1 then
-                startDeathTimer(dynamicTimerMs)
-            else
-                startNoAmbulanceTimer()
-            end
-        end)
-    end
+	-- เริ่มระบบเวลาปกติ (นับเวลา 35 นาที/3 นาที) ยกเว้น Training Zone
+	if zoneType ~= "training" then
+		local requested = ApexServerRequest('getDynamicRespawnTimer', nil, function(success, response)
+			local dynamicTimerMs = success and response and response.timerMs or nil
+			local emsCount = success and response and response.emsCount or 0
+			if (tonumber(emsCount) or 0) >= 1 then
+				startDeathTimer(dynamicTimerMs)
+			else
+				startNoAmbulanceTimer()
+			end
+		end)
+
+		if not requested then
+			-- fallback ป้องกันเคส request โดน throttle แล้วตัวนับเวลาไม่เริ่ม
+			startDeathTimer()
+		end
+	end
     
     -- เรียก actions ตาม config (ปรับปรุงประสิทธิภาพ)
     local actions = config.actions
@@ -1026,12 +1031,12 @@ function OnPlayerDeath()
         end
     end)
 
-    ApexServerRequest('getDynamicRespawnTimer', nil, function(success, response)
-        local dynamicTimerMs = success and response and response.timerMs or nil
-        local emsCount = success and response and response.emsCount or 0
-        if (tonumber(emsCount) or 0) >= 1 then
-            startDeathTimer(dynamicTimerMs)
-            startDistressSignal()
+	local requested = ApexServerRequest('getDynamicRespawnTimer', nil, function(success, response)
+		local dynamicTimerMs = success and response and response.timerMs or nil
+		local emsCount = success and response and response.emsCount or 0
+		if (tonumber(emsCount) or 0) >= 1 then
+			startDeathTimer(dynamicTimerMs)
+			startDistressSignal()
             startDistressSignalGang()
             clearBodyVoice()
         else
@@ -1040,9 +1045,17 @@ function OnPlayerDeath()
             SetTimeout(500, function()
                 sendSignalUi(true)
                 gangRequest(true)
-            end)
-        end
-    end)
+			end)
+		end
+	end)
+
+	if not requested then
+		-- fallback ป้องกันเคส request ไม่ถูกส่ง (cooldown/pending) จนปุ่มกับ timer ไม่เริ่ม
+		startDeathTimer()
+		startDistressSignal()
+		startDistressSignalGang()
+		clearBodyVoice()
+	end
 
 	startBodyStabilizationSequence()
 end
