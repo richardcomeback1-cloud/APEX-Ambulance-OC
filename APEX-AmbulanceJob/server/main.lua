@@ -1,5 +1,100 @@
 ESX = ESX or exports['es_extended']:getSharedObject()
 
+local securityConfig = Config.Security or {}
+local perfConfig = Config.Performance or {}
+local featureConfig = Config.Feature or {}
+local debugConfig = Config.Debug or {}
+
+local eventRateWindowMs = tonumber(perfConfig.EventRateWindowMs) or 10000
+local eventUsage = {}
+local eventMetrics = {}
+
+local eventLimits = {
+    ['esx_ambulancejob:setDeathStatus'] = 10,
+    ['esx_ambulancejob:payFine'] = 5,
+    ['esx_ambulancejob:payFineEvent'] = 5,
+    ['esx_ambulancejob:requestTalk'] = 8,
+    ['esx_ambulancejob:requestAccept'] = 8,
+    ['esx_ambulancejob:revive'] = 12,
+    ['esx_ambulancejob:superRevive'] = 5,
+    ['esx_ambulancejob:heal'] = 12
+}
+
+local LOG_LEVEL_WEIGHT = { DEBUG = 10, INFO = 20, WARN = 30, ERROR = 40 }
+
+local function log(level, message, ...)
+    local configured = tostring(debugConfig.LogLevel or 'INFO'):upper()
+    local configuredWeight = LOG_LEVEL_WEIGHT[configured] or LOG_LEVEL_WEIGHT.INFO
+    local levelWeight = LOG_LEVEL_WEIGHT[level] or LOG_LEVEL_WEIGHT.INFO
+    if levelWeight < configuredWeight then
+        return
+    end
+
+    local prefix = ('[APEX-AmbulanceJob][%s] '):format(level)
+    print(prefix .. message:format(...))
+end
+
+local function isOnlinePlayer(playerId)
+    if type(playerId) ~= 'number' or playerId <= 0 then
+        return false
+    end
+
+    if securityConfig.RejectUnknownPlayers and not GetPlayerName(playerId) then
+        return false
+    end
+
+    return true
+end
+
+local function trackEventMetric(eventName)
+    if not featureConfig.EnableEventMetrics then
+        return
+    end
+
+    eventMetrics[eventName] = (eventMetrics[eventName] or 0) + 1
+end
+
+local function isRateLimited(src, eventName)
+    if not securityConfig.EnableRateLimit then
+        return false
+    end
+
+    local now = GetGameTimer()
+    local key = ('%s:%s'):format(src, eventName)
+    local entry = eventUsage[key]
+
+    if not entry or now >= entry.resetAt then
+        eventUsage[key] = {
+            count = 1,
+            resetAt = now + eventRateWindowMs
+        }
+        return false
+    end
+
+    entry.count = entry.count + 1
+    local limit = eventLimits[eventName] or (tonumber(securityConfig.DefaultEventLimit) or 15)
+    if entry.count > limit then
+        if debugConfig.PrintRateLimitHits then
+            log('WARN', 'Rate limit exceeded: src=%s event=%s count=%s limit=%s', src, eventName, entry.count, limit)
+        end
+        return true
+    end
+
+    return false
+end
+
+CreateThread(function()
+    while true do
+        Wait(math.max(5000, eventRateWindowMs))
+        local now = GetGameTimer()
+        for key, entry in pairs(eventUsage) do
+            if now >= entry.resetAt then
+                eventUsage[key] = nil
+            end
+        end
+    end
+end)
+
 local function getXPlayer(source)
     return ESX.GetPlayerFromId(source)
 end
@@ -15,6 +110,16 @@ end)
 
 RegisterNetEvent('esx_ambulancejob:setDeathStatus', function(isDead)
     local src = source
+    trackEventMetric('esx_ambulancejob:setDeathStatus')
+    if isRateLimited(src, 'esx_ambulancejob:setDeathStatus') then
+        return
+    end
+
+    if securityConfig.StrictTypeValidation and type(isDead) ~= 'boolean' then
+        log('WARN', 'Blocked invalid death status payload from src=%s', src)
+        return
+    end
+
     local xPlayer = getXPlayer(src)
     if xPlayer then
         xPlayer.set('isDead', isDead and true or false)
@@ -189,6 +294,11 @@ end)
 
 RegisterNetEvent('esx_ambulancejob:payFine', function()
     local src = source
+    trackEventMetric('esx_ambulancejob:payFine')
+    if isRateLimited(src, 'esx_ambulancejob:payFine') then
+        return
+    end
+
     local xPlayer = getXPlayer(src)
     if not xPlayer then return end
     local amount = Config.EarlyRespawnFineAmount or 0
@@ -202,6 +312,11 @@ end)
 
 RegisterNetEvent('esx_ambulancejob:payFineEvent', function(payType)
     local src = source
+    trackEventMetric('esx_ambulancejob:payFineEvent')
+    if isRateLimited(src, 'esx_ambulancejob:payFineEvent') then
+        return
+    end
+
     local xPlayer = getXPlayer(src)
     if not xPlayer then return end
     local amount = Config.EventRespawnFineAmount or 0
@@ -243,6 +358,16 @@ end)
 
 RegisterNetEvent('esx_ambulancejob:revive', function(target)
     local src = source
+    trackEventMetric('esx_ambulancejob:revive')
+    if isRateLimited(src, 'esx_ambulancejob:revive') then
+        return
+    end
+
+    target = tonumber(target)
+    if not isOnlinePlayer(target) then
+        return
+    end
+
     local xPlayer = getXPlayer(src)
     if not xPlayer then return end
     if xPlayer.job and xPlayer.job.name == 'ambulance' and target then
@@ -252,17 +377,41 @@ end)
 
 RegisterNetEvent('esx_ambulancejob:superRevive', function(targetList)
     local src = source
+    trackEventMetric('esx_ambulancejob:superRevive')
+    if isRateLimited(src, 'esx_ambulancejob:superRevive') then
+        return
+    end
+
     local xPlayer = getXPlayer(src)
     if not xPlayer then return end
     if xPlayer.job and xPlayer.job.name == 'ambulance' and type(targetList) == 'table' then
+        local maxTargets = tonumber(securityConfig.MaxBatchTargets) or 20
+        local count = 0
         for _, t in ipairs(targetList) do
-            TriggerClientEvent('esx_ambulancejob:revive', t)
+            local target = tonumber(t)
+            if isOnlinePlayer(target) then
+                TriggerClientEvent('esx_ambulancejob:revive', target)
+                count = count + 1
+                if count >= maxTargets then
+                    break
+                end
+            end
         end
     end
 end)
 
 RegisterNetEvent('esx_ambulancejob:heal', function(target, healType)
     local src = source
+    trackEventMetric('esx_ambulancejob:heal')
+    if isRateLimited(src, 'esx_ambulancejob:heal') then
+        return
+    end
+
+    target = tonumber(target)
+    if not isOnlinePlayer(target) then
+        return
+    end
+
     local xPlayer = getXPlayer(src)
     if not xPlayer then return end
     if xPlayer.job and xPlayer.job.name == 'ambulance' and target then
@@ -272,13 +421,26 @@ end)
 
 RegisterNetEvent('esx_ambulancejob:requestTalk', function(target)
     local src = source
-    if target then
+    trackEventMetric('esx_ambulancejob:requestTalk')
+    if isRateLimited(src, 'esx_ambulancejob:requestTalk') then
+        return
+    end
+
+    target = tonumber(target)
+    if isOnlinePlayer(target) then
         TriggerClientEvent('esx_ambulancejob:requesToTalk', target, src)
     end
 end)
 
 RegisterNetEvent('esx_ambulancejob:requestAccept', function(playerTalk, ok, time)
-    if playerTalk then
+    local src = source
+    trackEventMetric('esx_ambulancejob:requestAccept')
+    if isRateLimited(src, 'esx_ambulancejob:requestAccept') then
+        return
+    end
+
+    playerTalk = tonumber(playerTalk)
+    if isOnlinePlayer(playerTalk) then
         if ok then
             TriggerClientEvent('esx_ambulancejob:updateTalk', playerTalk, tonumber(time) or 500)
         else
