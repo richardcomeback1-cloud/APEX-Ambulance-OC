@@ -680,11 +680,11 @@ CreateThread(function()
 			end
 		end
 
-		if isRangeVisible or isHeadVisible then
-			Wait(0)
-		else
-			Wait(250)
-		end
+			if isRangeVisible or isHeadVisible then
+				Wait(1)
+			else
+				Wait(250)
+			end
 	end
 end)
 

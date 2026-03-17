@@ -21,7 +21,7 @@ local function startCamLoop()
         while isDead and cam do
             local currentTime = GetGameTimer()
             ProcessCamControls(currentTime, lastRaycastTime)
-            Wait(0)
+            Wait(1)
             if currentTime - lastRaycastTime > CAMERA_RAYCAST_INTERVAL then
                 lastRaycastTime = currentTime
             end
