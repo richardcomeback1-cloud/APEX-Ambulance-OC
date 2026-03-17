@@ -856,29 +856,39 @@ end, false)
 
 RegisterKeyMapping('ambulance_open_mobile_menu', 'Open Ambulance Mobile Menu', 'keyboard', 'F6')
 
+local function closeAmbulanceMenuState()
+	ESX.UI.Menu.CloseAll()
+	AmbulanceMenuState.open = false
+	AmbulanceMenuState.level = 'none'
+	AmbulanceMenuState.previousOpener = nil
+	CurrentAction = nil
+end
+
 -- Key Controls
 Citizen.CreateThread(function()
 	while true do
 		local sleep = 250
+		local isMenuOpen = AmbulanceMenuState.open
 
-		if IsControlJustReleased(0, Keys['BACKSPACE']) then
-			if AmbulanceMenuState.open then
-				if AmbulanceMenuState.level == 'submenu' and AmbulanceMenuState.previousOpener then
-					local previousOpener = AmbulanceMenuState.previousOpener
-					ESX.UI.Menu.CloseAll()
-					Citizen.SetTimeout(0, function()
-						previousOpener()
-					end)
+		if isMenuOpen then
+			sleep = 0
+			local backPressed = IsControlJustReleased(0, Keys['BACKSPACE']) or IsDisabledControlJustReleased(0, Keys['BACKSPACE'])
+			local escPressed = IsControlJustReleased(0, 322) or IsDisabledControlJustReleased(0, 322)
+
+			if backPressed or escPressed then
+				if AmbulanceMenuState.open then
+					if AmbulanceMenuState.level == 'submenu' and AmbulanceMenuState.previousOpener then
+						local previousOpener = AmbulanceMenuState.previousOpener
+						ESX.UI.Menu.CloseAll()
+						Citizen.SetTimeout(0, function()
+							previousOpener()
+						end)
+					else
+						closeAmbulanceMenuState()
+					end
 				else
-					ESX.UI.Menu.CloseAll()
-					AmbulanceMenuState.open = false
-					AmbulanceMenuState.level = 'none'
-					AmbulanceMenuState.previousOpener = nil
-					CurrentAction = nil
+					closeAmbulanceMenuState()
 				end
-			else
-				ESX.UI.Menu.CloseAll()
-				CurrentAction = nil
 			end
 		end
 
