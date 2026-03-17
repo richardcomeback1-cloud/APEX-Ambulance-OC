@@ -687,75 +687,79 @@ Citizen.CreateThread(function()
 	while true do
 		local sleep = 1200
 		local playerCoords = GetEntityCoords(PlayerPedId())
+		local playerJob = ESX.PlayerData and ESX.PlayerData.job
+		local isAmbulance = playerJob and playerJob.name == 'ambulance'
 		local letSleep, isInMarker, hasExited = true, false, false
 		local currentHospital, currentPart, currentPartNum
 
 		for hospitalNum, hospital in pairs(Config.Hospitals) do
-			-- Ambulance Actions
-			for k, v in ipairs(hospital.AmbulanceActions or {}) do
-				local distance = GetDistanceBetweenCoords(playerCoords, v, true)
+			if isAmbulance then
+				-- Ambulance Actions
+				for k, v in ipairs(hospital.AmbulanceActions or {}) do
+					local distance = GetDistanceBetweenCoords(playerCoords, v, true)
 
-				if distance < 7 then
-					sleep = 0
-					DrawMarker(Config.Marker.type, v, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, Config.Marker.x, Config.Marker.y,
-						Config.Marker.z, Config.Marker.r, Config.Marker.g, Config.Marker.b, Config.Marker.a, false, true,
-						2, true, false, false, false)
-					letSleep = false
+					if distance < 7 then
+						sleep = 0
+						DrawMarker(Config.Marker.type, v, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, Config.Marker.x, Config.Marker.y,
+							Config.Marker.z, Config.Marker.r, Config.Marker.g, Config.Marker.b, Config.Marker.a, false, true,
+							2, true, false, false, false)
+						letSleep = false
+					end
+
+					if distance < Config.Marker.x then
+						isInMarker, currentHospital, currentPart, currentPartNum = true, hospitalNum, 'AmbulanceActions', k
+					end
 				end
 
-				if distance < Config.Marker.x then
-					isInMarker, currentHospital, currentPart, currentPartNum = true, hospitalNum, 'AmbulanceActions', k
-				end
-			end
+				--Pharmacies
+				for k, v in ipairs(hospital.Pharmacies or {}) do
+					local distance = GetDistanceBetweenCoords(playerCoords, v, true)
 
-			--Pharmacies
-			for k, v in ipairs(hospital.Pharmacies or {}) do
-				local distance = GetDistanceBetweenCoords(playerCoords, v, true)
+					if distance < 7 then
+						sleep = 0
+						DrawMarker(Config.Marker.type, v, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, Config.Marker.x, Config.Marker.y,
+							Config.Marker.z, Config.Marker.r, Config.Marker.g, Config.Marker.b, Config.Marker.a, false, false,
+							2, true, false, false, false)
+						letSleep = false
+					end
 
-				if distance < 7 then
-					sleep = 0
-					DrawMarker(Config.Marker.type, v, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, Config.Marker.x, Config.Marker.y,
-						Config.Marker.z, Config.Marker.r, Config.Marker.g, Config.Marker.b, Config.Marker.a, false, false,
-						2, true, false, false, false)
-					letSleep = false
-				end
-
-				if distance < Config.Marker.x then
-					isInMarker, currentHospital, currentPart, currentPartNum = true, hospitalNum, 'Pharmacy', k
-				end
-			end
-
-			-- Vehicle Spawners
-			for k, v in ipairs(hospital.Vehicles or {}) do
-				local distance = GetDistanceBetweenCoords(playerCoords, v.Spawner, true)
-
-				if distance < 10 then
-					sleep = 0
-					DrawMarker(v.Marker.type, v.Spawner, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, v.Marker.x, v.Marker.y, v.Marker
-						.z, v.Marker.r, v.Marker.g, v.Marker.b, v.Marker.a, false, false, 2, v.Marker.rotate, nil, nil,
-						false)
-					letSleep = false
+					if distance < Config.Marker.x then
+						isInMarker, currentHospital, currentPart, currentPartNum = true, hospitalNum, 'Pharmacy', k
+					end
 				end
 
-				if distance < v.Marker.x then
-					isInMarker, currentHospital, currentPart, currentPartNum = true, hospitalNum, 'Vehicles', k
+				-- Vehicle Spawners
+				for k, v in ipairs(hospital.Vehicles or {}) do
+					local distance = GetDistanceBetweenCoords(playerCoords, v.Spawner, true)
+
+					if distance < 10 then
+						sleep = 0
+						DrawMarker(v.Marker.type, v.Spawner, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, v.Marker.x, v.Marker.y, v.Marker
+							.z, v.Marker.r, v.Marker.g, v.Marker.b, v.Marker.a, false, false, 2, v.Marker.rotate, nil, nil,
+							false)
+						letSleep = false
+					end
+
+					if distance < v.Marker.x then
+						isInMarker, currentHospital, currentPart, currentPartNum = true, hospitalNum, 'Vehicles', k
+					end
 				end
-			end
 
-			-- Helicopter Spawners
-			for k, v in ipairs(hospital.Helicopters or {}) do
-				local distance = GetDistanceBetweenCoords(playerCoords, v.Spawner, true)
+				-- Helicopter Spawners
+				for k, v in ipairs(hospital.Helicopters or {}) do
+					local distance = GetDistanceBetweenCoords(playerCoords, v.Spawner, true)
 
-				if distance < 20 then
-					sleep = 0
-					DrawMarker(v.Marker.type, v.Spawner, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, v.Marker.x, v.Marker.y, v.Marker
-						.z, v.Marker.r, v.Marker.g, v.Marker.b, v.Marker.a, false, false, 2, v.Marker.rotate, nil, nil,
-						false)
-					letSleep = false
-				end
+					if distance < 20 then
+						sleep = 0
+						DrawMarker(v.Marker.type, v.Spawner, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, v.Marker.x, v.Marker.y, v.Marker
+							.z, v.Marker.r, v.Marker.g, v.Marker.b, v.Marker.a, false, false, 2, v.Marker.rotate, nil, nil,
+							false)
+						letSleep = false
+					end
 
-				if distance < v.Marker.x then
-					isInMarker, currentHospital, currentPart, currentPartNum = true, hospitalNum, 'Helicopters', k
+					if distance < v.Marker.x then
+						isInMarker, currentHospital, currentPart, currentPartNum = true, hospitalNum, 'Helicopters', k
+					end
 				end
 			end
 
@@ -894,11 +898,11 @@ Citizen.CreateThread(function()
 
 				CurrentAction = nil
 			end
-		elseif ESX.PlayerData and ESX.PlayerData.job and ESX.PlayerData.job.name == 'ambulance' and not IsDead then
-			sleep = 0
-			if IsControlJustReleased(0, Keys['F6']) then
-				OpenMobileAmbulanceActionsMenu()
-			end
+			elseif ESX.PlayerData and ESX.PlayerData.job and ESX.PlayerData.job.name == 'ambulance' and not IsDead then
+				sleep = 50
+				if IsControlJustReleased(0, Keys['F6']) then
+					OpenMobileAmbulanceActionsMenu()
+				end
 		end
 
 		Citizen.Wait(sleep)
