@@ -74,6 +74,15 @@ Config.BleedoutTimer              = 0 * minute --เวลาก่อนที�
 -- 1) player : เวลาของผู้เล่นทั่วไปที่ตาย
 -- 2) ems    : เวลาของหมอที่ตาย
 -- enabled = true  : เปิดใช้งานระบบเวลาแบบแยก
+
+Config.CoreRateLimit = {
+    perSecond = 12 -- จำกัดจำนวน core request ต่อวินาที/ผู้เล่น
+}
+
+Config.CoreWriteQueue = {
+    flushMs = 15000 -- batch write ทุก 15 วินาที
+}
+
 Config.DynamicEarlyRespawnTimer = {
     enabled = true,
     player = {

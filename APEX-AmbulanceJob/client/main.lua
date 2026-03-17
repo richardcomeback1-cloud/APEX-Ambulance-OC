@@ -16,6 +16,27 @@ IsDead = false
 
 ESX = nil
 
+local CoreRequestId = 0
+local CorePendingRequests = {}
+
+function ApexServerRequest(action, payload, cb)
+    CoreRequestId = CoreRequestId + 1
+    local requestId = CoreRequestId
+
+    CorePendingRequests[requestId] = cb
+    TriggerServerEvent('apex_core:serverRequest', requestId, action, payload or {})
+end
+
+RegisterNetEvent('apex_core:serverResponse', function(requestId, ok, data)
+    local callback = CorePendingRequests[requestId]
+    if not callback then
+        return
+    end
+
+    CorePendingRequests[requestId] = nil
+    callback(ok, data)
+end)
+
 local talk = false
 local bodywarp = false
 local ClearBody = false
@@ -75,8 +96,8 @@ AddEventHandler('esx:onPlayerSpawn', function()
         exports.spawnmanager:setAutoSpawn(false) -- ปิด auto respawn
         FirstSpawn = false
 
-		ESX.TriggerServerCallback('esx_ambulancejob:getDeathStatus', function(isDead)
-			if isDead and Config.AntiCombatLog then
+		ApexServerRequest('getDeathStatus', nil, function(success, isDead)
+			if success and isDead and Config.AntiCombatLog then
 				Wait(5000)
 				pcall(function()
                     exports['lizz_playerhud']:toggleHUD(false)
@@ -196,7 +217,9 @@ local function handleZoneDeath(zoneType, config, zoneIndex)
 
     -- เริ่มระบบเวลาปกติ (นับเวลา 35 นาที/3 นาที) ยกเว้น Training Zone
     if zoneType ~= "training" then
-        ESX.TriggerServerCallback('esx_ambulancejob:getDynamicRespawnTimer', function(dynamicTimerMs, emsCount)
+        ApexServerRequest('getDynamicRespawnTimer', nil, function(success, response)
+            local dynamicTimerMs = success and response and response.timerMs or nil
+            local emsCount = success and response and response.emsCount or 0
             if (tonumber(emsCount) or 0) >= 1 then
                 startDeathTimer(dynamicTimerMs)
             else
@@ -943,7 +966,9 @@ function OnPlayerDeath()
         end
     end)
 
-    ESX.TriggerServerCallback('esx_ambulancejob:getDynamicRespawnTimer', function(dynamicTimerMs, emsCount)
+    ApexServerRequest('getDynamicRespawnTimer', nil, function(success, response)
+        local dynamicTimerMs = success and response and response.timerMs or nil
+        local emsCount = success and response and response.emsCount or 0
         if (tonumber(emsCount) or 0) >= 1 then
             startDeathTimer(dynamicTimerMs)
             startDistressSignal()
@@ -1072,8 +1097,8 @@ Citizen.CreateThread(function()
     while true do
         local blipCfg = getAmbulancePlayerBlipConfig()
         if blipCfg.enabled and ESX.PlayerData and ESX.PlayerData.job and ESX.PlayerData.job.name == 'ambulance' then
-            ESX.TriggerServerCallback('esx_ambulancejob:getAmbulanceBlipTargets', function(targets)
-                AmbulanceBlipTargets = targets or {}
+            ApexServerRequest('getAmbulanceBlipTargets', nil, function(success, targets)
+                AmbulanceBlipTargets = (success and targets) or {}
             end)
             Citizen.Wait(math.max(500, blipCfg.refreshTargetsMs))
         else
@@ -1560,8 +1585,8 @@ function startDeathTimer(dynamicTimerMs)
     local isPress = false
 
     if Config.EarlyRespawnFine then
-        ESX.TriggerServerCallback('esx_ambulancejob:checkBalance', function(canPay)
-            canPayFine = canPay
+        ApexServerRequest('checkBalance', nil, function(success, canPay)
+            canPayFine = success and canPay or false
         end)
     end
 
@@ -1816,8 +1841,8 @@ RegisterCommand('emsrespawntimer', function()
         return
     end
 
-    ESX.TriggerServerCallback('esx_ambulancejob:getDynamicRespawnSettings', function(settings)
-        if not settings or not settings.enabled then
+    ApexServerRequest('getDynamicRespawnSettings', nil, function(success, settings)
+        if not success or not settings or not settings.enabled then
             ESX.ShowNotification('ระบบปรับเวลาเกิดอัตโนมัติถูกปิดอยู่', 'error')
             return
         end
