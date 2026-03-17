@@ -30,6 +30,14 @@ local REQUEST_COOLDOWN_MS = 750
 local RATE_LIMIT_PER_WINDOW = (Config.CoreRateLimit and Config.CoreRateLimit.perSecond) or 10
 local WRITE_FLUSH_MS = (Config.CoreWriteQueue and Config.CoreWriteQueue.flushMs) or 15000
 
+local function oxPrepareAwait(query, params)
+    if MySQL and MySQL.prepare and MySQL.prepare.await then
+        return MySQL.prepare.await(query, params)
+    end
+
+    return exports.oxmysql:prepare(query, params)
+end
+
 local function getNowMs()
     return GetGameTimer()
 end
@@ -102,7 +110,7 @@ local function flushWriteQueue()
 end
 
 CreateThread(function()
-    local columns = exports.oxmysql:prepare.await('SHOW COLUMNS FROM users WHERE Field IN (?, ?)', { 'is_dead', 'dead' }) or {}
+    local columns = oxPrepareAwait('SHOW COLUMNS FROM users WHERE Field IN (?, ?)', { 'is_dead', 'dead' }) or {}
     for i = 1, #columns do
         local field = columns[i].Field
         if field == 'is_dead' then
@@ -145,7 +153,7 @@ RegisterNetEvent('esx:playerLoaded', function(playerId, xPlayer)
     end
 
     if DeathDbColumn then
-        local dbDead = exports.oxmysql:prepare.await(
+        local dbDead = oxPrepareAwait(
             ('SELECT %s FROM users WHERE identifier = ? LIMIT 1'):format(DeathDbColumn),
             { cached.identifier }
         )
