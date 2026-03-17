@@ -189,8 +189,8 @@ local function withMedicActionItem(actionType, onSuccess)
 		return
 	end
 
-	ESX.TriggerServerCallback('esx_ambulancejob:hasItem', function(hasItem)
-		if not hasItem then
+	ApexServerRequest('hasItem', { itemName = itemName, minCount = 1 }, function(success, hasItem)
+		if not success or not hasItem then
 			pushNotify(('You do not have %s.'):format(itemLabel), 'error', 3000)
 			return
 		end
@@ -198,7 +198,7 @@ local function withMedicActionItem(actionType, onSuccess)
 		if onSuccess then
 			onSuccess(itemName)
 		end
-	end, itemName, 1)
+	end)
 end
 
 

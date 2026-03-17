@@ -1,55 +1,287 @@
-ESX = ESX or exports['es_extended']:getSharedObject()
+local ESX = exports['es_extended']:getSharedObject()
 
-local function getXPlayer(source)
-    return ESX.GetPlayerFromId(source)
+local PLAYER_CACHE = {}
+local PROCESSING_LOCKS = {}
+local REQUEST_RATE_LIMIT = {}
+local WRITE_QUEUE = {
+    death = {}
+}
+
+local DeathDbColumn = nil
+local CoreRequestHandlers = {}
+
+local RATE_WINDOW_MS = 1000
+local REQUEST_COOLDOWN_MS = 750
+local RATE_LIMIT_PER_WINDOW = (Config.CoreRateLimit and Config.CoreRateLimit.perSecond) or 10
+local WRITE_FLUSH_MS = (Config.CoreWriteQueue and Config.CoreWriteQueue.flushMs) or 15000
+
+local function getNowMs()
+    return GetGameTimer()
 end
 
-ESX.RegisterServerCallback('esx_ambulancejob:getDeathStatus', function(source, cb)
-    local xPlayer = getXPlayer(source)
-    local isDead = false
-    if xPlayer then
-        isDead = xPlayer.get('isDead') or xPlayer.get('dead') or false
-    end
-    cb(isDead)
-end)
+local function isValidSource(src)
+    return type(src) == 'number' and src > 0
+end
 
-RegisterNetEvent('esx_ambulancejob:setDeathStatus', function(isDead)
-    local src = source
-    local xPlayer = getXPlayer(src)
-    if xPlayer then
-        xPlayer.set('isDead', isDead and true or false)
-        xPlayer.set('dead', isDead and true or false)
+local function getPlayerCache(src)
+    if not isValidSource(src) then
+        return nil
     end
-end)
 
-ESX.RegisterServerCallback('esx_ambulancejob:checkBalance', function(source, cb)
-    local xPlayer = getXPlayer(source)
+    local cached = PLAYER_CACHE[src]
+    if cached then
+        return cached
+    end
+
+    local xPlayer = ESX.GetPlayerFromId(src)
     if not xPlayer then
-        cb(false)
-        return
-    end
-    local amount = Config.EarlyRespawnFineAmount or 0
-    local bank = xPlayer.getAccount('bank') and xPlayer.getAccount('bank').money or 0
-    local cash = xPlayer.getAccount('money') and xPlayer.getAccount('money').money or 0
-    cb((bank + cash) >= amount)
-end)
-
-ESX.RegisterServerCallback('esx_ambulancejob:hasItem', function(source, cb, itemName, minCount)
-    local xPlayer = getXPlayer(source)
-    if not xPlayer or not itemName or itemName == '' then
-        cb(false)
-        return
+        return nil
     end
 
-    local need = tonumber(minCount) or 1
-    local inv = xPlayer.getInventoryItem and xPlayer.getInventoryItem(itemName) or nil
-    local count = inv and (tonumber(inv.count) or 0) or 0
+    local accounts = xPlayer.getAccounts and xPlayer.getAccounts() or {}
+    local moneyMap = {}
 
-    cb(count >= need)
+    for i = 1, #accounts do
+        local account = accounts[i]
+        if account and account.name then
+            moneyMap[account.name] = tonumber(account.money) or 0
+        end
+    end
+
+    local data = {
+        source = src,
+        identifier = xPlayer.identifier,
+        job = xPlayer.job,
+        money = moneyMap,
+        inventory = xPlayer.getInventory and xPlayer.getInventory(true) or {},
+        isDead = xPlayer.get('isDead') or xPlayer.get('dead') or false,
+        xPlayer = xPlayer
+    }
+
+    PLAYER_CACHE[src] = data
+    return data
+end
+
+local function setCacheDirtyDeath(identifier, isDead)
+    if not identifier or not DeathDbColumn then
+        return
+    end
+
+    WRITE_QUEUE.death[identifier] = isDead and 1 or 0
+end
+
+local function flushWriteQueue()
+    if not DeathDbColumn then
+        return
+    end
+
+    local updates = WRITE_QUEUE.death
+    WRITE_QUEUE.death = {}
+
+    for identifier, isDead in pairs(updates) do
+        exports.oxmysql:execute(
+            ('UPDATE users SET %s = ? WHERE identifier = ?'):format(DeathDbColumn),
+            { isDead, identifier }
+        )
+    end
+end
+
+CreateThread(function()
+    local columns = exports.oxmysql:prepare.await('SHOW COLUMNS FROM users WHERE Field IN (?, ?)', { 'is_dead', 'dead' }) or {}
+    for i = 1, #columns do
+        local field = columns[i].Field
+        if field == 'is_dead' then
+            DeathDbColumn = 'is_dead'
+            break
+        elseif field == 'dead' then
+            DeathDbColumn = 'dead'
+        end
+    end
+
+    while true do
+        Wait(WRITE_FLUSH_MS)
+        flushWriteQueue()
+    end
 end)
+
+AddEventHandler('playerDropped', function()
+    local src = source
+    local cached = PLAYER_CACHE[src]
+    if cached then
+        setCacheDirtyDeath(cached.identifier, cached.isDead)
+    end
+
+    PLAYER_CACHE[src] = nil
+    PROCESSING_LOCKS[src] = nil
+    REQUEST_RATE_LIMIT[src] = nil
+end)
+
+RegisterNetEvent('esx:playerLoaded', function(playerId, xPlayer)
+    local src = playerId
+    local resolvedXPlayer = xPlayer or ESX.GetPlayerFromId(src)
+    if not resolvedXPlayer then
+        return
+    end
+
+    local cached = getPlayerCache(src)
+    if not cached then
+        return
+    end
+
+    if DeathDbColumn then
+        local dbDead = exports.oxmysql:prepare.await(
+            ('SELECT %s FROM users WHERE identifier = ? LIMIT 1'):format(DeathDbColumn),
+            { cached.identifier }
+        )
+
+        local value = dbDead and dbDead[1] and dbDead[1][DeathDbColumn]
+        local isDead = tonumber(value) == 1
+        cached.isDead = isDead
+        resolvedXPlayer.set('isDead', isDead)
+        resolvedXPlayer.set('dead', isDead)
+    end
+end)
+
+RegisterNetEvent('esx:setJob', function(playerId, job)
+    local cached = PLAYER_CACHE[playerId]
+    if cached then
+        cached.job = job
+    end
+end)
+
+local function updateMoneyCache(cached)
+    local xPlayer = cached and cached.xPlayer
+    if not xPlayer then return end
+
+    local accounts = xPlayer.getAccounts and xPlayer.getAccounts() or {}
+    for i = 1, #accounts do
+        local account = accounts[i]
+        if account and account.name then
+            cached.money[account.name] = tonumber(account.money) or 0
+        end
+    end
+end
+
+local function updateInventoryCache(cached)
+    local xPlayer = cached and cached.xPlayer
+    if not xPlayer then return end
+    cached.inventory = xPlayer.getInventory and xPlayer.getInventory(true) or {}
+end
+
+local function withPlayerLock(src, cb)
+    if PROCESSING_LOCKS[src] then
+        return false, 'processing'
+    end
+
+    PROCESSING_LOCKS[src] = true
+    local ok, result = pcall(cb)
+    PROCESSING_LOCKS[src] = nil
+
+    if not ok then
+        return false, result
+    end
+
+    return true, result
+end
+
+local function rateLimitOkay(src)
+    local now = getNowMs()
+    local state = REQUEST_RATE_LIMIT[src]
+
+    if not state then
+        REQUEST_RATE_LIMIT[src] = { windowStart = now, count = 1, lastRequest = now }
+        return true
+    end
+
+    if (now - (state.lastRequest or 0)) < REQUEST_COOLDOWN_MS then
+        return false
+    end
+
+    state.lastRequest = now
+
+    if (now - state.windowStart) >= RATE_WINDOW_MS then
+        state.windowStart = now
+        state.count = 1
+        return true
+    end
+
+    if state.count >= RATE_LIMIT_PER_WINDOW then
+        return false
+    end
+
+    state.count = state.count + 1
+    return true
+end
+
+exports('GetPlayer', function(src)
+    local cached = getPlayerCache(src)
+    if not cached then return nil end
+
+    return {
+        source = cached.source,
+        identifier = cached.identifier,
+        job = cached.job,
+        money = cached.money,
+        inventory = cached.inventory,
+        isDead = cached.isDead
+    }
+end)
+
+exports('GetInventory', function(src)
+    local cached = getPlayerCache(src)
+    return cached and cached.inventory or {}
+end)
+
+exports('HasItem', function(src, itemName, minCount)
+    if type(itemName) ~= 'string' or itemName == '' then
+        return false
+    end
+
+    local cached = getPlayerCache(src)
+    if not cached then return false end
+
+    local needed = tonumber(minCount) or 1
+    local entry = cached.inventory[itemName]
+    local count = entry and tonumber(entry.count) or 0
+    return count >= needed
+end)
+
+exports('AddMoney', function(src, amount, account)
+    local cached = getPlayerCache(src)
+    if not cached then return false end
+
+    amount = math.floor(tonumber(amount) or 0)
+    if amount <= 0 then return false end
+
+    local accountName = account == 'money' and 'money' or 'bank'
+    cached.xPlayer.addAccountMoney(accountName, amount)
+    updateMoneyCache(cached)
+    return true
+end)
+
+exports('RemoveMoney', function(src, amount, account)
+    local cached = getPlayerCache(src)
+    if not cached then return false end
+
+    amount = math.floor(tonumber(amount) or 0)
+    if amount <= 0 then return false end
+
+    local accountName = account == 'money' and 'money' or 'bank'
+    local current = cached.money[accountName] or 0
+    if current < amount then
+        return false
+    end
+
+    cached.xPlayer.removeAccountMoney(accountName, amount)
+    updateMoneyCache(cached)
+    return true
+end)
+
+local function isAmbulance(cached)
+    return cached and cached.job and cached.job.name == 'ambulance'
+end
 
 local dynamicTimerConfig = Config.DynamicEarlyRespawnTimer or {}
-
 local function getFallbackMinutes()
     return math.max(1, math.floor((Config.EarlyRespawnTimer or 600000) / 60000))
 end
@@ -65,46 +297,32 @@ local dynamicRespawnMinutes = {
     }
 }
 
-local function isAmbulance(xPlayer)
-    return xPlayer and xPlayer.job and xPlayer.job.name == 'ambulance'
-end
-
 local function getOnlineAmbulanceCount()
     local count = 0
-
-    if ESX.GetExtendedPlayers then
-        for _, xPlayer in pairs(ESX.GetExtendedPlayers()) do
-            if isAmbulance(xPlayer) then
-                count = count + 1
-            end
-        end
-        return count
-    end
-
-    if ESX.GetPlayers then
-        for _, playerId in ipairs(ESX.GetPlayers()) do
-            local xPlayer = getXPlayer(playerId)
-            if isAmbulance(xPlayer) then
-                count = count + 1
-            end
+    for _, src in ipairs(GetPlayers()) do
+        local cached = getPlayerCache(tonumber(src))
+        if isAmbulance(cached) then
+            count = count + 1
         end
     end
-
     return count
 end
 
-ESX.RegisterServerCallback('esx_ambulancejob:getDynamicRespawnTimer', function(source, cb)
-    local xPlayer = getXPlayer(source)
+CoreRequestHandlers.getDeathStatus = function(src)
+    local cached = getPlayerCache(src)
+    return cached and cached.isDead or false
+end
+
+CoreRequestHandlers.getDynamicRespawnTimer = function(src)
+    local cached = getPlayerCache(src)
     local emsCount = getOnlineAmbulanceCount()
     local timerMs = Config.EarlyRespawnTimerNoEms or (3 * 60 * 1000)
 
     if emsCount >= 1 then
         timerMs = Config.EarlyRespawnTimer or (35 * 60 * 1000)
-
         if dynamicTimerConfig.enabled then
-            local mode = isAmbulance(xPlayer) and 'ems' or 'player'
+            local mode = isAmbulance(cached) and 'ems' or 'player'
             local modeConfig = dynamicRespawnMinutes[mode]
-
             if emsCount == 1 then
                 timerMs = math.max(1, modeConfig.oneEms) * 60 * 1000
             elseif emsCount > 1 then
@@ -113,36 +331,47 @@ ESX.RegisterServerCallback('esx_ambulancejob:getDynamicRespawnTimer', function(s
         end
     end
 
-    cb(timerMs, emsCount)
-end)
+    return {
+        timerMs = timerMs,
+        emsCount = emsCount
+    }
+end
 
-
-ESX.RegisterServerCallback('esx_ambulancejob:getAmbulanceBlipTargets', function(source, cb)
-    local requester = getXPlayer(source)
-    if not requester or not isAmbulance(requester) then
-        cb({})
-        return
+CoreRequestHandlers.getAmbulanceBlipTargets = function(src)
+    local requester = getPlayerCache(src)
+    if not isAmbulance(requester) then
+        return {}
     end
 
     local targets = {}
-
-    if ESX.GetPlayers then
-        for _, playerId in ipairs(ESX.GetPlayers()) do
-            local xPlayer = getXPlayer(playerId)
-            if isAmbulance(xPlayer) then
-                table.insert(targets, {
-                    id = tonumber(playerId),
-                    name = (xPlayer.getName and xPlayer.getName()) or GetPlayerName(playerId) or tostring(playerId)
-                })
-            end
+    for _, id in ipairs(GetPlayers()) do
+        local serverId = tonumber(id)
+        local cached = getPlayerCache(serverId)
+        if isAmbulance(cached) then
+            targets[#targets + 1] = {
+                id = serverId,
+                name = GetPlayerName(serverId) or tostring(serverId)
+            }
         end
     end
 
-    cb(targets)
-end)
+    return targets
+end
 
-ESX.RegisterServerCallback('esx_ambulancejob:getDynamicRespawnSettings', function(source, cb)
-    cb({
+CoreRequestHandlers.checkBalance = function(src)
+    local cached = getPlayerCache(src)
+    if not cached then return false end
+
+    local amount = Config.EarlyRespawnFineAmount or 0
+    return ((cached.money.bank or 0) + (cached.money.money or 0)) >= amount
+end
+
+CoreRequestHandlers.hasItem = function(src, payload)
+    return exports[GetCurrentResourceName()]:HasItem(src, payload and payload.itemName, payload and payload.minCount)
+end
+
+CoreRequestHandlers.getDynamicRespawnSettings = function()
+    return {
         enabled = dynamicTimerConfig.enabled and true or false,
         player = {
             oneEmsMinutes = dynamicRespawnMinutes.player.oneEms,
@@ -152,28 +381,60 @@ ESX.RegisterServerCallback('esx_ambulancejob:getDynamicRespawnSettings', functio
             oneEmsMinutes = dynamicRespawnMinutes.ems.oneEms,
             multiEmsMinutes = dynamicRespawnMinutes.ems.multiEms
         }
-    })
+    }
+end
+
+RegisterNetEvent('apex_core:serverRequest', function(requestId, action, payload)
+    local src = source
+    if not rateLimitOkay(src) then
+        TriggerClientEvent('apex_core:serverResponse', src, requestId, false, 'rate_limited')
+        return
+    end
+
+    if type(requestId) ~= 'number' or type(action) ~= 'string' then
+        TriggerClientEvent('apex_core:serverResponse', src, requestId, false, 'invalid_request')
+        return
+    end
+
+    local handler = CoreRequestHandlers[action]
+    if not handler then
+        TriggerClientEvent('apex_core:serverResponse', src, requestId, false, 'unknown_action')
+        return
+    end
+
+    local ok, response = pcall(handler, src, payload)
+    if not ok then
+        TriggerClientEvent('apex_core:serverResponse', src, requestId, false, 'handler_error')
+        return
+    end
+
+    TriggerClientEvent('apex_core:serverResponse', src, requestId, true, response)
+end)
+
+RegisterNetEvent('esx_ambulancejob:setDeathStatus', function(isDead)
+    local src = source
+    local cached = getPlayerCache(src)
+    if not cached then return end
+
+    local deadState = isDead and true or false
+    cached.isDead = deadState
+    cached.xPlayer.set('isDead', deadState)
+    cached.xPlayer.set('dead', deadState)
+    setCacheDirtyDeath(cached.identifier, deadState)
 end)
 
 RegisterNetEvent('esx_ambulancejob:setDynamicRespawnSettings', function(playerOneEmsMinutes, playerMultiEmsMinutes, emsOneEmsMinutes, emsMultiEmsMinutes)
     local src = source
-    local xPlayer = getXPlayer(src)
-    if not isAmbulance(xPlayer) then
-        return
-    end
+    local cached = getPlayerCache(src)
+    if not isAmbulance(cached) then return end
 
-    local pOne = tonumber(playerOneEmsMinutes)
-    local pMulti = tonumber(playerMultiEmsMinutes)
-    local eOne = tonumber(emsOneEmsMinutes)
-    local eMulti = tonumber(emsMultiEmsMinutes)
-
+    local pOne, pMulti, eOne, eMulti = tonumber(playerOneEmsMinutes), tonumber(playerMultiEmsMinutes), tonumber(emsOneEmsMinutes), tonumber(emsMultiEmsMinutes)
     if not pOne or not pMulti or not eOne or not eMulti then
         TriggerClientEvent('esx:showNotification', src, 'กรุณาใส่จำนวนนาทีให้ถูกต้อง')
         return
     end
 
     pOne, pMulti, eOne, eMulti = math.floor(pOne), math.floor(pMulti), math.floor(eOne), math.floor(eMulti)
-
     if pOne < 1 or pMulti < 1 or eOne < 1 or eMulti < 1 or pOne > 120 or pMulti > 120 or eOne > 120 or eMulti > 120 then
         TriggerClientEvent('esx:showNotification', src, 'กำหนดเวลาได้ตั้งแต่ 1 - 120 นาทีเท่านั้น')
         return
@@ -189,100 +450,125 @@ end)
 
 RegisterNetEvent('esx_ambulancejob:payFine', function()
     local src = source
-    local xPlayer = getXPlayer(src)
-    if not xPlayer then return end
-    local amount = Config.EarlyRespawnFineAmount or 0
-    local bank = xPlayer.getAccount('bank') and xPlayer.getAccount('bank').money or 0
-    if bank >= amount then
-        xPlayer.removeAccountMoney('bank', amount)
-    else
-        xPlayer.removeAccountMoney('money', amount)
-    end
+    local cached = getPlayerCache(src)
+    if not cached then return end
+
+    local amount = math.max(0, math.floor(tonumber(Config.EarlyRespawnFineAmount) or 0))
+    if amount == 0 then return end
+
+    withPlayerLock(src, function()
+        if (cached.money.bank or 0) >= amount then
+            exports[GetCurrentResourceName()]:RemoveMoney(src, amount, 'bank')
+        elseif (cached.money.money or 0) >= amount then
+            exports[GetCurrentResourceName()]:RemoveMoney(src, amount, 'money')
+        end
+    end)
 end)
 
 RegisterNetEvent('esx_ambulancejob:payFineEvent', function(payType)
     local src = source
-    local xPlayer = getXPlayer(src)
-    if not xPlayer then return end
-    local amount = Config.EventRespawnFineAmount or 0
-    if payType == 'bank' then
-        xPlayer.removeAccountMoney('bank', amount)
-    else
-        xPlayer.removeAccountMoney('money', amount)
-    end
+    local cached = getPlayerCache(src)
+    if not cached then return end
+
+    local amount = math.max(0, math.floor(tonumber(Config.EventRespawnFineAmount) or 0))
+    if amount == 0 then return end
+
+    local account = payType == 'bank' and 'bank' or 'money'
+    withPlayerLock(src, function()
+        exports[GetCurrentResourceName()]:RemoveMoney(src, amount, account)
+    end)
 end)
 
 RegisterNetEvent('esx_ambulancejob:giveItem', function(item, count)
     local src = source
-    local xPlayer = getXPlayer(src)
-    if not xPlayer then return end
-    if xPlayer.job and xPlayer.job.name == 'ambulance' and item and count and count > 0 then
-        xPlayer.addInventoryItem(item, count)
-    end
+    local cached = getPlayerCache(src)
+    if not isAmbulance(cached) then return end
+
+    local amount = math.floor(tonumber(count) or 0)
+    if type(item) ~= 'string' or item == '' or amount <= 0 or amount > 100 then return end
+
+    withPlayerLock(src, function()
+        cached.xPlayer.addInventoryItem(item, amount)
+        updateInventoryCache(cached)
+    end)
 end)
 
 RegisterNetEvent('esx_ambulancejob:removeItem', function(item)
     local src = source
-    local xPlayer = getXPlayer(src)
-    if not xPlayer then return end
-    if item then
-        xPlayer.removeInventoryItem(item, 1)
-    end
+    local cached = getPlayerCache(src)
+    if not cached then return end
+    if type(item) ~= 'string' or item == '' then return end
+
+    withPlayerLock(src, function()
+        local invItem = cached.xPlayer.getInventoryItem(item)
+        if invItem and (tonumber(invItem.count) or 0) > 0 then
+            cached.xPlayer.removeInventoryItem(item, 1)
+            updateInventoryCache(cached)
+        end
+    end)
 end)
 
 RegisterNetEvent('esx_ambulancejob:addExp', function(typeItem, count)
     local src = source
-    local xPlayer = getXPlayer(src)
-    if not xPlayer then return end
+    local cached = getPlayerCache(src)
+    if not cached then return end
+
+    local n = math.floor(tonumber(count) or 1)
+    if n < 1 or n > 10 then return end
+
     local itemName = Config.ItemExp
-    local n = tonumber(count) or 1
     if itemName and Config.AddItemEXP then
-        Config.AddItemEXP(typeItem, xPlayer, itemName, n)
+        Config.AddItemEXP(typeItem, cached.xPlayer, itemName, n)
+        updateInventoryCache(cached)
     end
 end)
 
 RegisterNetEvent('esx_ambulancejob:revive', function(target)
     local src = source
-    local xPlayer = getXPlayer(src)
-    if not xPlayer then return end
-    if xPlayer.job and xPlayer.job.name == 'ambulance' and target then
-        TriggerClientEvent('esx_ambulancejob:revive', target)
-    end
+    if not isAmbulance(getPlayerCache(src)) then return end
+
+    target = tonumber(target)
+    if not target or not getPlayerCache(target) then return end
+    TriggerClientEvent('esx_ambulancejob:revive', target)
 end)
 
 RegisterNetEvent('esx_ambulancejob:superRevive', function(targetList)
     local src = source
-    local xPlayer = getXPlayer(src)
-    if not xPlayer then return end
-    if xPlayer.job and xPlayer.job.name == 'ambulance' and type(targetList) == 'table' then
-        for _, t in ipairs(targetList) do
-            TriggerClientEvent('esx_ambulancejob:revive', t)
+    if not isAmbulance(getPlayerCache(src)) then return end
+    if type(targetList) ~= 'table' then return end
+
+    for i = 1, #targetList do
+        local target = tonumber(targetList[i])
+        if target and getPlayerCache(target) then
+            TriggerClientEvent('esx_ambulancejob:revive', target)
         end
     end
 end)
 
 RegisterNetEvent('esx_ambulancejob:heal', function(target, healType)
     local src = source
-    local xPlayer = getXPlayer(src)
-    if not xPlayer then return end
-    if xPlayer.job and xPlayer.job.name == 'ambulance' and target then
-        TriggerClientEvent('esx_ambulancejob:heal', target, healType or 'small')
-    end
+    if not isAmbulance(getPlayerCache(src)) then return end
+
+    target = tonumber(target)
+    if not target or not getPlayerCache(target) then return end
+    TriggerClientEvent('esx_ambulancejob:heal', target, healType or 'small')
 end)
 
 RegisterNetEvent('esx_ambulancejob:requestTalk', function(target)
     local src = source
-    if target then
+    target = tonumber(target)
+    if target and getPlayerCache(target) then
         TriggerClientEvent('esx_ambulancejob:requesToTalk', target, src)
     end
 end)
 
 RegisterNetEvent('esx_ambulancejob:requestAccept', function(playerTalk, ok, time)
-    if playerTalk then
-        if ok then
-            TriggerClientEvent('esx_ambulancejob:updateTalk', playerTalk, tonumber(time) or 500)
-        else
-            TriggerClientEvent('esx_ambulancejob:updateTalk', playerTalk)
-        end
+    local target = tonumber(playerTalk)
+    if not target then return end
+
+    if ok then
+        TriggerClientEvent('esx_ambulancejob:updateTalk', target, tonumber(time) or 500)
+    else
+        TriggerClientEvent('esx_ambulancejob:updateTalk', target)
     end
 end)
