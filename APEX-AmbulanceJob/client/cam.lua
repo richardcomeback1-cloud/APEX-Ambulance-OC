@@ -21,7 +21,7 @@ local function startCamLoop()
         while isDead and cam do
             local currentTime = GetGameTimer()
             ProcessCamControls(currentTime, lastRaycastTime)
-            Wait(0)
+            Wait(1)
             if currentTime - lastRaycastTime > CAMERA_RAYCAST_INTERVAL then
                 lastRaycastTime = currentTime
             end
@@ -54,13 +54,13 @@ function ProcessCamControls(currentTime, lastRaycastTime)
     local playerPed = PlayerPedId()
     local playerCoords = GetEntityCoords(playerPed)
     DisableFirstPersonCamThisFrame()
-    local newPos = ProcessNewPosition(playerCoords, currentTime, lastRaycastTime)
+    local newPos = ProcessNewPosition(playerPed, playerCoords, currentTime, lastRaycastTime)
     SetFocusArea(newPos.x, newPos.y, newPos.z, 0.0, 0.0, 0.0)
     SetCamCoord(cam, newPos.x, newPos.y, newPos.z)
     PointCamAtCoord(cam, playerCoords.x, playerCoords.y, playerCoords.z + 0.5)
 end
 
-function ProcessNewPosition(pCoords, currentTime, lastRaycastTime)
+function ProcessNewPosition(playerPed, pCoords, currentTime, lastRaycastTime)
     local mouseX = GetDisabledControlNormal(1, 1) * (IsInputDisabled(0) and 8.0 or 1.5)
     local mouseY = GetDisabledControlNormal(1, 2) * (IsInputDisabled(0) and 8.0 or 1.5)
 
@@ -75,12 +75,16 @@ function ProcessNewPosition(pCoords, currentTime, lastRaycastTime)
 
     local maxRadius = CAMERA_RADIUS
     if currentTime - lastRaycastTime > CAMERA_RAYCAST_INTERVAL then
-        local rayHandle = StartShapeTestRay(pCoords.x, pCoords.y, pCoords.z + 0.5, behindCam.x, behindCam.y, behindCam.z, -1, PlayerPedId(), 0)
+        local rayHandle = StartShapeTestRay(pCoords.x, pCoords.y, pCoords.z + 0.5, behindCam.x, behindCam.y, behindCam.z, -1, playerPed, 0)
         local _, hitBool, hitCoords = GetShapeTestResult(rayHandle)
         if hitBool then
-            local dist = #(vector3(pCoords.x, pCoords.y, pCoords.z + 0.5) - hitCoords)
-            if dist < Rpad then
-                maxRadius = dist
+            local dx = pCoords.x - hitCoords.x
+            local dy = pCoords.y - hitCoords.y
+            local dz = (pCoords.z + 0.5) - hitCoords.z
+            local distSq = (dx * dx) + (dy * dy) + (dz * dz)
+            local rpadSq = Rpad * Rpad
+            if distSq < rpadSq then
+                maxRadius = math.sqrt(distSq)
             end
         end
     end

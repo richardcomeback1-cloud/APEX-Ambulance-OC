@@ -555,8 +555,6 @@ function OpenMobileAmbulanceActionsMenu()
 		{ label = 'ชุบชีวิต', value = 'revive_menu' },
 		{ label = 'ฉีดยา', value = 'heal_menu' },
 		{ label = 'ตรวจบัตรประชาชน', value = 'identity_card' },
-		{ label = 'นำคนไข้ขึนรถ', value = 'put_in_vehicle' },
-		{ label = 'นำคนไข้ออกรถ', value = 'put_out_vehicle' },
 		{ label = 'เมนูบิล', value = 'billed' },
 		{ label = 'ส่งตัวผู้เล่น', value = 'sendgarage' },
 	}
@@ -586,38 +584,46 @@ function OpenMobileAmbulanceActionsMenu()
 			TriggerServerEvent('esx_policejob:message', 'error', GetPlayerServerId(closestPlayer),
 				'You have been your ID checked.')
 		elseif data.current.value == 'sendgarage' then
+			local transferCfg = Config.PlayerTransfer or {}
+			if transferCfg.enabled == false then
+				ESX.ShowNotification('ระบบส่งตัวถูกปิดอยู่', 'error')
+				return
+			end
+
 			local closestPlayer = getClosestPlayerWithin(3.0)
 			if not closestPlayer then return end
+
+			local destinations = transferCfg.destinations or {}
+			if #destinations == 0 then
+				ESX.ShowNotification('ยังไม่ได้ตั้งค่าจุดส่งตัวผู้เล่น', 'error')
+				return
+			end
+
 			AmbulanceMenuState.level = 'submenu'
 			AmbulanceMenuState.previousOpener = OpenMobileAmbulanceActionsMenu
+
+			local destinationElements = {}
+			for i = 1, #destinations do
+				local destination = destinations[i]
+				table.insert(destinationElements, {
+					label = destination.label or ('จุดที่ ' .. i),
+					value = i
+				})
+			end
+
 			ESX.UI.Menu.Open('default', GetCurrentResourceName(), 'send_garage', {
-				title    = "SEND PLAYER TO GARAGE",
+				title    = "เลือกจุดส่งตัวผู้เล่น",
 				align    = 'top-right',
-				elements = {
-					{ label = 'ตงลง', value = 'YES' },
-					{ label = 'ยกเลิก', value = 'NO' },
-				}
+				elements = destinationElements
 			}, function(dataa, menuu)
-				if dataa.current.value == "YES" then
-					safeCloseMenu(menuu)
-					TriggerServerEvent('sendplayertogarage', GetPlayerServerId(closestPlayer))
-				else
-					safeCloseMenu(menuu)
-				end
+				safeCloseMenu(menuu)
+				TriggerServerEvent('sendplayertogarage', GetPlayerServerId(closestPlayer), tonumber(dataa.current.value))
 			end, function(_, menuu)
 				safeCloseMenu(menuu)
 				if AmbulanceMenuState.open then
 					AmbulanceMenuState.level = 'main'
 				end
 			end)
-		elseif data.current.value == 'put_in_vehicle' then
-			local closestPlayer = getClosestPlayerWithin(3.0)
-			if not closestPlayer then return end
-			TriggerServerEvent('esx_ambulancejob:putInVehicle', GetPlayerServerId(closestPlayer))
-		elseif data.current.value == 'put_out_vehicle' then
-			local closestPlayer = getClosestPlayerWithin(3.0)
-			if not closestPlayer then return end
-			TriggerServerEvent('esx_ambulancejob:outVehicle', GetPlayerServerId(closestPlayer))
 		elseif data.current.value == 'billed' then
 			local closestPlayer = getClosestPlayerWithin(2.0)
 			if not closestPlayer then return end
@@ -674,105 +680,117 @@ CreateThread(function()
 			end
 		end
 
-		if isRangeVisible or isHeadVisible then
-			Wait(0)
-		else
-			Wait(250)
-		end
+			if isRangeVisible or isHeadVisible then
+				Wait(1)
+			else
+				Wait(250)
+			end
 	end
 end)
 
 -- Draw markers & Marker logic
 Citizen.CreateThread(function()
+	local function getDistSq(a, b)
+		local dx = a.x - b.x
+		local dy = a.y - b.y
+		local dz = a.z - b.z
+		return (dx * dx) + (dy * dy) + (dz * dz)
+	end
+
 	while true do
 		local sleep = 1200
 		local playerCoords = GetEntityCoords(PlayerPedId())
+		local playerJob = ESX.PlayerData and ESX.PlayerData.job
+		local isAmbulance = playerJob and playerJob.name == 'ambulance'
 		local letSleep, isInMarker, hasExited = true, false, false
 		local currentHospital, currentPart, currentPartNum
 
 		for hospitalNum, hospital in pairs(Config.Hospitals) do
-			-- Ambulance Actions
-			for k, v in ipairs(hospital.AmbulanceActions or {}) do
-				local distance = GetDistanceBetweenCoords(playerCoords, v, true)
+			if isAmbulance then
+				-- Ambulance Actions
+				for k, v in ipairs(hospital.AmbulanceActions or {}) do
+					local distSq = getDistSq(playerCoords, v)
 
-				if distance < 7 then
-					sleep = 0
-					DrawMarker(Config.Marker.type, v, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, Config.Marker.x, Config.Marker.y,
-						Config.Marker.z, Config.Marker.r, Config.Marker.g, Config.Marker.b, Config.Marker.a, false, true,
-						2, true, false, false, false)
-					letSleep = false
+					if distSq < 49.0 then
+						sleep = 0
+						DrawMarker(Config.Marker.type, v, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, Config.Marker.x, Config.Marker.y,
+							Config.Marker.z, Config.Marker.r, Config.Marker.g, Config.Marker.b, Config.Marker.a, false, true,
+							2, true, false, false, false)
+						letSleep = false
+					end
+
+					if distSq < (Config.Marker.x * Config.Marker.x) then
+						isInMarker, currentHospital, currentPart, currentPartNum = true, hospitalNum, 'AmbulanceActions', k
+					end
 				end
 
-				if distance < Config.Marker.x then
-					isInMarker, currentHospital, currentPart, currentPartNum = true, hospitalNum, 'AmbulanceActions', k
+				--Pharmacies
+				for k, v in ipairs(hospital.Pharmacies or {}) do
+					local distSq = getDistSq(playerCoords, v)
+
+					if distSq < 49.0 then
+						sleep = 0
+						DrawMarker(Config.Marker.type, v, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, Config.Marker.x, Config.Marker.y,
+							Config.Marker.z, Config.Marker.r, Config.Marker.g, Config.Marker.b, Config.Marker.a, false, false,
+							2, true, false, false, false)
+						letSleep = false
+					end
+
+					if distSq < (Config.Marker.x * Config.Marker.x) then
+						isInMarker, currentHospital, currentPart, currentPartNum = true, hospitalNum, 'Pharmacy', k
+					end
+				end
+
+				-- Vehicle Spawners
+				for k, v in ipairs(hospital.Vehicles or {}) do
+					local distSq = getDistSq(playerCoords, v.Spawner)
+
+					if distSq < 100.0 then
+						sleep = 0
+						DrawMarker(v.Marker.type, v.Spawner, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, v.Marker.x, v.Marker.y, v.Marker
+							.z, v.Marker.r, v.Marker.g, v.Marker.b, v.Marker.a, false, false, 2, v.Marker.rotate, nil, nil,
+							false)
+						letSleep = false
+					end
+
+					if distSq < (v.Marker.x * v.Marker.x) then
+						isInMarker, currentHospital, currentPart, currentPartNum = true, hospitalNum, 'Vehicles', k
+					end
+				end
+
+				-- Helicopter Spawners
+				for k, v in ipairs(hospital.Helicopters or {}) do
+					local distSq = getDistSq(playerCoords, v.Spawner)
+
+					if distSq < 400.0 then
+						sleep = 0
+						DrawMarker(v.Marker.type, v.Spawner, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, v.Marker.x, v.Marker.y, v.Marker
+							.z, v.Marker.r, v.Marker.g, v.Marker.b, v.Marker.a, false, false, 2, v.Marker.rotate, nil, nil,
+							false)
+						letSleep = false
+					end
+
+					if distSq < (v.Marker.x * v.Marker.x) then
+						isInMarker, currentHospital, currentPart, currentPartNum = true, hospitalNum, 'Helicopters', k
+					end
 				end
 			end
 
-			--Pharmacies
-			for k, v in ipairs(hospital.Pharmacies or {}) do
-				local distance = GetDistanceBetweenCoords(playerCoords, v, true)
+			if isAmbulance then
+				-- Fast Travels
+				for k, v in ipairs(hospital.FastTravels or {}) do
+					local distSq = getDistSq(playerCoords, v.From)
 
-				if distance < 7 then
-					sleep = 0
-					DrawMarker(Config.Marker.type, v, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, Config.Marker.x, Config.Marker.y,
-						Config.Marker.z, Config.Marker.r, Config.Marker.g, Config.Marker.b, Config.Marker.a, false, false,
-						2, true, false, false, false)
-					letSleep = false
-				end
+					if distSq < 400.0 then
+						sleep = 0
+						DrawMarker(v.Marker.type, v.From, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, v.Marker.x, v.Marker.y, v.Marker.z,
+							v.Marker.r, v.Marker.g, v.Marker.b, v.Marker.a, false, false, 2, v.Marker.rotate, nil, nil, false)
+						letSleep = false
+					end
 
-				if distance < Config.Marker.x then
-					isInMarker, currentHospital, currentPart, currentPartNum = true, hospitalNum, 'Pharmacy', k
-				end
-			end
-
-			-- Vehicle Spawners
-			for k, v in ipairs(hospital.Vehicles or {}) do
-				local distance = GetDistanceBetweenCoords(playerCoords, v.Spawner, true)
-
-				if distance < 10 then
-					sleep = 0
-					DrawMarker(v.Marker.type, v.Spawner, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, v.Marker.x, v.Marker.y, v.Marker
-						.z, v.Marker.r, v.Marker.g, v.Marker.b, v.Marker.a, false, false, 2, v.Marker.rotate, nil, nil,
-						false)
-					letSleep = false
-				end
-
-				if distance < v.Marker.x then
-					isInMarker, currentHospital, currentPart, currentPartNum = true, hospitalNum, 'Vehicles', k
-				end
-			end
-
-			-- Helicopter Spawners
-			for k, v in ipairs(hospital.Helicopters or {}) do
-				local distance = GetDistanceBetweenCoords(playerCoords, v.Spawner, true)
-
-				if distance < 20 then
-					sleep = 0
-					DrawMarker(v.Marker.type, v.Spawner, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, v.Marker.x, v.Marker.y, v.Marker
-						.z, v.Marker.r, v.Marker.g, v.Marker.b, v.Marker.a, false, false, 2, v.Marker.rotate, nil, nil,
-						false)
-					letSleep = false
-				end
-
-				if distance < v.Marker.x then
-					isInMarker, currentHospital, currentPart, currentPartNum = true, hospitalNum, 'Helicopters', k
-				end
-			end
-
-			-- Fast Travels
-			for k, v in ipairs(hospital.FastTravels or {}) do
-				local distance = GetDistanceBetweenCoords(playerCoords, v.From, true)
-
-				if distance < 20 then
-					sleep = 0
-					DrawMarker(v.Marker.type, v.From, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, v.Marker.x, v.Marker.y, v.Marker.z,
-						v.Marker.r, v.Marker.g, v.Marker.b, v.Marker.a, false, false, 2, v.Marker.rotate, nil, nil, false)
-					letSleep = false
-				end
-
-
-				if distance < v.Marker.x then
-					FastTravel(v.To.coords, v.To.heading)
+					if distSq < (v.Marker.x * v.Marker.x) then
+						FastTravel(v.To.coords, v.To.heading)
+					end
 				end
 			end
 		end
@@ -843,29 +861,67 @@ AddEventHandler('esx_ambulancejob:hasExitedMarker', function(hospital, part, par
 	CurrentAction = nil
 end)
 
+RegisterCommand('ambulance_open_mobile_menu', function()
+	if IsDead then return end
+	if not (ESX.PlayerData and ESX.PlayerData.job and ESX.PlayerData.job.name == 'ambulance') then return end
+	OpenMobileAmbulanceActionsMenu()
+end, false)
+
+RegisterKeyMapping('ambulance_open_mobile_menu', 'Open Ambulance Mobile Menu', 'keyboard', 'F6')
+
+local function closeAmbulanceMenuState()
+	ESX.UI.Menu.CloseAll()
+	AmbulanceMenuState.open = false
+	AmbulanceMenuState.level = 'none'
+	AmbulanceMenuState.previousOpener = nil
+	CurrentAction = nil
+end
+
+local function isAnyEsxMenuOpen()
+	if not (ESX and ESX.UI and ESX.UI.Menu and ESX.UI.Menu.GetOpenedMenus) then
+		return false
+	end
+
+	local ok, menus = pcall(ESX.UI.Menu.GetOpenedMenus)
+	return ok and type(menus) == 'table' and #menus > 0
+end
+
+local lastOpenedMenuCheck = 0
+local cachedHasOpenMenu = false
+
+local function getHasOpenMenuCached(now)
+	if (now - lastOpenedMenuCheck) >= 200 then
+		cachedHasOpenMenu = isAnyEsxMenuOpen()
+		lastOpenedMenuCheck = now
+	end
+
+	return cachedHasOpenMenu
+end
+
 -- Key Controls
 Citizen.CreateThread(function()
 	while true do
 		local sleep = 250
+		local now = GetGameTimer()
+		local hasOpenMenu = getHasOpenMenuCached(now)
+		local isMenuOpen = AmbulanceMenuState.open or hasOpenMenu
 
-		if IsControlJustReleased(0, Keys['BACKSPACE']) then
-			if AmbulanceMenuState.open then
-				if AmbulanceMenuState.level == 'submenu' and AmbulanceMenuState.previousOpener then
+		if isMenuOpen then
+			sleep = 5
+			local backPressed = IsControlJustReleased(0, Keys['BACKSPACE']) or IsDisabledControlJustReleased(0, Keys['BACKSPACE'])
+			local escPressed = IsControlJustReleased(0, 322) or IsDisabledControlJustReleased(0, 322)
+
+			if backPressed or escPressed then
+				if AmbulanceMenuState.open and AmbulanceMenuState.level == 'submenu' and AmbulanceMenuState.previousOpener then
 					local previousOpener = AmbulanceMenuState.previousOpener
 					ESX.UI.Menu.CloseAll()
 					Citizen.SetTimeout(0, function()
 						previousOpener()
 					end)
 				else
-					ESX.UI.Menu.CloseAll()
-					AmbulanceMenuState.open = false
-					AmbulanceMenuState.level = 'none'
-					AmbulanceMenuState.previousOpener = nil
-					CurrentAction = nil
+					closeAmbulanceMenuState()
+					cachedHasOpenMenu = false
 				end
-			else
-				ESX.UI.Menu.CloseAll()
-				CurrentAction = nil
 			end
 		end
 
@@ -894,11 +950,6 @@ Citizen.CreateThread(function()
 
 				CurrentAction = nil
 			end
-		elseif ESX.PlayerData and ESX.PlayerData.job and ESX.PlayerData.job.name == 'ambulance' and not IsDead then
-			sleep = 0
-			if IsControlJustReleased(0, Keys['F6']) then
-				OpenMobileAmbulanceActionsMenu()
-			end
 		end
 
 		Citizen.Wait(sleep)
@@ -917,30 +968,6 @@ Citizen.CreateThread(function()
 	end
 end)
 
-RegisterNetEvent('esx_ambulancejob:putInVehicle')
-AddEventHandler('esx_ambulancejob:putInVehicle', function()
-	local playerPed = PlayerPedId()
-	local coords = GetEntityCoords(playerPed)
-
-	if IsAnyVehicleNearPoint(coords, 5.0) then
-		local vehicle = GetClosestVehicle(coords, 5.0, 0, 71)
-
-		if DoesEntityExist(vehicle) then
-			local maxSeats, freeSeat = GetVehicleMaxNumberOfPassengers(vehicle)
-
-			for i = maxSeats - 1, 0, -1 do
-				if IsVehicleSeatFree(vehicle, i) then
-					freeSeat = i
-					break
-				end
-			end
-
-			if freeSeat then
-				TaskWarpPedIntoVehicle(playerPed, vehicle, freeSeat)
-			end
-		end
-	end
-end)
 
 function OpenCloakroomMenu()
 	local playerPed = PlayerPedId()
@@ -1406,25 +1433,27 @@ function _CHKHASITEM(Item)
 	return 0
 end
 
-RegisterNetEvent('esx_ambulancejob:outVehicle')
-AddEventHandler('esx_ambulancejob:outVehicle', function()
-	local playerPed = PlayerPedId()
-
-	if not IsPedSittingInAnyVehicle(playerPed) then
-		return
-	end
-
-	local vehicle = GetVehiclePedIsIn(playerPed, false)
-	TaskLeaveVehicle(playerPed, vehicle, 16)
-end)
 
 RegisterNetEvent('sendplayertogarage')
-AddEventHandler('sendplayertogarage', function()
-	RdmPoint = math.random(1, #Config.RandomPointSendPlayer)
+AddEventHandler('sendplayertogarage', function(destinationIndex)
+	local transferCfg = Config.PlayerTransfer or {}
+	local destinations = transferCfg.destinations or {}
+	if #destinations == 0 then return end
 
-	SetEntityCoords(PlayerPedId(), Config.RandomPointSendPlayer[RdmPoint].x, Config.RandomPointSendPlayer[RdmPoint].y,
-		Config.RandomPointSendPlayer[RdmPoint].z + 1)
-	SetEntityHeading(PlayerPedId(), Config.RandomPointSendPlayer[RdmPoint].h)
+	local index = tonumber(destinationIndex)
+	if not index or not destinations[index] then
+		if transferCfg.useRandomWhenNoPick then
+			index = math.random(1, #destinations)
+		else
+			index = 1
+		end
+	end
+
+	local destination = destinations[index]
+	if not destination or not destination.coords then return end
+
+	SetEntityCoords(PlayerPedId(), destination.coords.x, destination.coords.y, destination.coords.z + 1.0)
+	SetEntityHeading(PlayerPedId(), destination.heading or 0.0)
 end)
 
 function OpenCreateBilling(player)
