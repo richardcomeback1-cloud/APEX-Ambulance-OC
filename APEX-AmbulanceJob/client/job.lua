@@ -864,11 +864,21 @@ local function closeAmbulanceMenuState()
 	CurrentAction = nil
 end
 
+local function isAnyEsxMenuOpen()
+	if not (ESX and ESX.UI and ESX.UI.Menu and ESX.UI.Menu.GetOpenedMenus) then
+		return false
+	end
+
+	local ok, menus = pcall(ESX.UI.Menu.GetOpenedMenus)
+	return ok and type(menus) == 'table' and #menus > 0
+end
+
 -- Key Controls
 Citizen.CreateThread(function()
 	while true do
 		local sleep = 250
-		local isMenuOpen = AmbulanceMenuState.open
+		local hasOpenMenu = isAnyEsxMenuOpen()
+		local isMenuOpen = AmbulanceMenuState.open or hasOpenMenu
 
 		if isMenuOpen then
 			sleep = 0
@@ -876,16 +886,12 @@ Citizen.CreateThread(function()
 			local escPressed = IsControlJustReleased(0, 322) or IsDisabledControlJustReleased(0, 322)
 
 			if backPressed or escPressed then
-				if AmbulanceMenuState.open then
-					if AmbulanceMenuState.level == 'submenu' and AmbulanceMenuState.previousOpener then
-						local previousOpener = AmbulanceMenuState.previousOpener
-						ESX.UI.Menu.CloseAll()
-						Citizen.SetTimeout(0, function()
-							previousOpener()
-						end)
-					else
-						closeAmbulanceMenuState()
-					end
+				if AmbulanceMenuState.open and AmbulanceMenuState.level == 'submenu' and AmbulanceMenuState.previousOpener then
+					local previousOpener = AmbulanceMenuState.previousOpener
+					ESX.UI.Menu.CloseAll()
+					Citizen.SetTimeout(0, function()
+						previousOpener()
+					end)
 				else
 					closeAmbulanceMenuState()
 				end
