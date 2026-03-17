@@ -1890,15 +1890,31 @@ function IsInBlockZone()
     local playerPed = PlayerPedId()
     local playerCoords = GetEntityCoords(playerPed)
     for _, zone in pairs(Config.BlockZone) do
-        local dist = #(playerCoords - zone.coords)
-        if dist <= zone.radius then
+        local dx = playerCoords.x - zone.coords.x
+        local dy = playerCoords.y - zone.coords.y
+        local dz = playerCoords.z - zone.coords.z
+        local radius = zone.radius or 0.0
+        if (dx * dx + dy * dy + dz * dz) <= (radius * radius) then
             return true
         end
     end
     return false
 end
 
+local NuiStateCache = {
+    uiVisible = nil,
+    talk = nil,
+    sendsignal = nil,
+    addclass = nil,
+    requestTalk = nil,
+    gang = nil,
+    police = nil,
+    time = nil
+}
+
 function talkingSetui(bool)
+	if NuiStateCache.talk == bool then return end
+	NuiStateCache.talk = bool
 	SendNUIMessage({
 		action = 'talk',
 		bool = bool
@@ -1906,6 +1922,8 @@ function talkingSetui(bool)
 end
 
 closeUi = function ()
+	if NuiStateCache.uiVisible == false then return end
+	NuiStateCache.uiVisible = false
 	SendNUIMessage({
 		type = 'ui',
 		status = false
@@ -1950,6 +1968,8 @@ RegisterCommand('emsrespawntimer', function()
 end, false)
 
 sendSignalUi = function (A)
+	if NuiStateCache.sendsignal == A then return end
+	NuiStateCache.sendsignal = A
 	SendNUIMessage({
 		type = 'sendsignal',
 		status = A,
@@ -1957,6 +1977,8 @@ sendSignalUi = function (A)
 end
 
 clearBodyUi = function (A)
+	if NuiStateCache.addclass == A then return end
+	NuiStateCache.addclass = A
 	SendNUIMessage({
 		type = 'addclass',
 		status = A,
@@ -1964,6 +1986,8 @@ clearBodyUi = function (A)
 end
 
 requestTalk = function (A)
+	if NuiStateCache.requestTalk == A then return end
+	NuiStateCache.requestTalk = A
 	SendNUIMessage({
 		type = 'requestTalk',
 		status = A,
@@ -1971,6 +1995,8 @@ requestTalk = function (A)
 end
 
 gangRequest = function (A)
+	if NuiStateCache.gang == A then return end
+	NuiStateCache.gang = A
 	SendNUIMessage({
 		type = 'gang',
 		status = A,
@@ -1978,6 +2004,8 @@ gangRequest = function (A)
 end
 
 policeRequest = function (A)
+	if NuiStateCache.police == A then return end
+	NuiStateCache.police = A
 	SendNUIMessage({
 		type = 'police',
 		status = A,
@@ -1985,6 +2013,8 @@ policeRequest = function (A)
 end
 
 RespawnTime = function (text)
+	if NuiStateCache.time == text then return end
+	NuiStateCache.time = text
 	SendNUIMessage({
 		type = 'time',
 		time = text

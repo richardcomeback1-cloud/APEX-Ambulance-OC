@@ -690,6 +690,13 @@ end)
 
 -- Draw markers & Marker logic
 Citizen.CreateThread(function()
+	local function getDistSq(a, b)
+		local dx = a.x - b.x
+		local dy = a.y - b.y
+		local dz = a.z - b.z
+		return (dx * dx) + (dy * dy) + (dz * dz)
+	end
+
 	while true do
 		local sleep = 1200
 		local playerCoords = GetEntityCoords(PlayerPedId())
@@ -702,9 +709,9 @@ Citizen.CreateThread(function()
 			if isAmbulance then
 				-- Ambulance Actions
 				for k, v in ipairs(hospital.AmbulanceActions or {}) do
-					local distance = GetDistanceBetweenCoords(playerCoords, v, true)
+					local distSq = getDistSq(playerCoords, v)
 
-					if distance < 7 then
+					if distSq < 49.0 then
 						sleep = 0
 						DrawMarker(Config.Marker.type, v, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, Config.Marker.x, Config.Marker.y,
 							Config.Marker.z, Config.Marker.r, Config.Marker.g, Config.Marker.b, Config.Marker.a, false, true,
@@ -712,16 +719,16 @@ Citizen.CreateThread(function()
 						letSleep = false
 					end
 
-					if distance < Config.Marker.x then
+					if distSq < (Config.Marker.x * Config.Marker.x) then
 						isInMarker, currentHospital, currentPart, currentPartNum = true, hospitalNum, 'AmbulanceActions', k
 					end
 				end
 
 				--Pharmacies
 				for k, v in ipairs(hospital.Pharmacies or {}) do
-					local distance = GetDistanceBetweenCoords(playerCoords, v, true)
+					local distSq = getDistSq(playerCoords, v)
 
-					if distance < 7 then
+					if distSq < 49.0 then
 						sleep = 0
 						DrawMarker(Config.Marker.type, v, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, Config.Marker.x, Config.Marker.y,
 							Config.Marker.z, Config.Marker.r, Config.Marker.g, Config.Marker.b, Config.Marker.a, false, false,
@@ -729,16 +736,16 @@ Citizen.CreateThread(function()
 						letSleep = false
 					end
 
-					if distance < Config.Marker.x then
+					if distSq < (Config.Marker.x * Config.Marker.x) then
 						isInMarker, currentHospital, currentPart, currentPartNum = true, hospitalNum, 'Pharmacy', k
 					end
 				end
 
 				-- Vehicle Spawners
 				for k, v in ipairs(hospital.Vehicles or {}) do
-					local distance = GetDistanceBetweenCoords(playerCoords, v.Spawner, true)
+					local distSq = getDistSq(playerCoords, v.Spawner)
 
-					if distance < 10 then
+					if distSq < 100.0 then
 						sleep = 0
 						DrawMarker(v.Marker.type, v.Spawner, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, v.Marker.x, v.Marker.y, v.Marker
 							.z, v.Marker.r, v.Marker.g, v.Marker.b, v.Marker.a, false, false, 2, v.Marker.rotate, nil, nil,
@@ -746,16 +753,16 @@ Citizen.CreateThread(function()
 						letSleep = false
 					end
 
-					if distance < v.Marker.x then
+					if distSq < (v.Marker.x * v.Marker.x) then
 						isInMarker, currentHospital, currentPart, currentPartNum = true, hospitalNum, 'Vehicles', k
 					end
 				end
 
 				-- Helicopter Spawners
 				for k, v in ipairs(hospital.Helicopters or {}) do
-					local distance = GetDistanceBetweenCoords(playerCoords, v.Spawner, true)
+					local distSq = getDistSq(playerCoords, v.Spawner)
 
-					if distance < 20 then
+					if distSq < 400.0 then
 						sleep = 0
 						DrawMarker(v.Marker.type, v.Spawner, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, v.Marker.x, v.Marker.y, v.Marker
 							.z, v.Marker.r, v.Marker.g, v.Marker.b, v.Marker.a, false, false, 2, v.Marker.rotate, nil, nil,
@@ -763,7 +770,7 @@ Citizen.CreateThread(function()
 						letSleep = false
 					end
 
-					if distance < v.Marker.x then
+					if distSq < (v.Marker.x * v.Marker.x) then
 						isInMarker, currentHospital, currentPart, currentPartNum = true, hospitalNum, 'Helicopters', k
 					end
 				end
@@ -772,16 +779,16 @@ Citizen.CreateThread(function()
 			if isAmbulance then
 				-- Fast Travels
 				for k, v in ipairs(hospital.FastTravels or {}) do
-					local distance = GetDistanceBetweenCoords(playerCoords, v.From, true)
+					local distSq = getDistSq(playerCoords, v.From)
 
-					if distance < 20 then
+					if distSq < 400.0 then
 						sleep = 0
 						DrawMarker(v.Marker.type, v.From, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, v.Marker.x, v.Marker.y, v.Marker.z,
 							v.Marker.r, v.Marker.g, v.Marker.b, v.Marker.a, false, false, 2, v.Marker.rotate, nil, nil, false)
 						letSleep = false
 					end
 
-					if distance < v.Marker.x then
+					if distSq < (v.Marker.x * v.Marker.x) then
 						FastTravel(v.To.coords, v.To.heading)
 					end
 				end
